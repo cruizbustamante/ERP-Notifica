@@ -1,21 +1,26 @@
-export default function ErpLayout({
+import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import Navbar from "@/components/Navbar";
+
+export default async function ErpLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) redirect("/login");
+
+  const { data: userRole } = await supabase
+    .from("user_roles")
+    .select("rol, nombre, email")
+    .eq("user_id", user.id)
+    .single();
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-indigo-950 text-white px-6 py-3 flex items-center gap-6">
-        <a href="/" className="font-bold text-lg">Notifica Legal</a>
-        <div className="flex gap-4 text-sm text-indigo-300">
-          <a href="/dashboard" className="hover:text-white transition">Dashboard</a>
-          <a href="/contabilidad" className="hover:text-white transition">Contabilidad</a>
-          <a href="/conciliacion" className="hover:text-white transition">Conciliación</a>
-          <a href="/centralizacion" className="hover:text-white transition">Centralización</a>
-          <a href="/clientes" className="hover:text-white transition">Clientes</a>
-          <a href="/reportes" className="hover:text-white transition">Reportes</a>
-        </div>
-      </nav>
+      <Navbar user={userRole || { email: user.email || "", rol: "consulta", nombre: "" }} />
       <main className="p-6">{children}</main>
     </div>
   );
