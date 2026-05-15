@@ -1,0 +1,161 @@
+<nav class="sidebar" id="mainSidebar">
+  <div class="sidebar-header">
+    <div class="logo">
+      <div class="logo-mark">NL</div>
+      <div class="logo-info">
+        <span class="logo-text">Notifica Legal</span>
+        <span class="logo-subtitle">ERP Contable</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="sidebar-menu">
+    <div class="menu-section">
+      <span class="menu-section-title">Contabilidad</span>
+      <a href="#" onclick="navigateTo('dashboard'); return false;" class="menu-item" id="menu-dashboard">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </span>
+        <span class="mt">Dashboard</span>
+      </a>
+      <a href="#" onclick="navigateTo('contabilidad'); return false;" class="menu-item" id="menu-contabilidad">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+        </span>
+        <span class="mt">Contabilidad</span>
+      </a>
+      <a href="#" onclick="navigateTo('conciliacion'); return false;" class="menu-item" id="menu-conciliacion">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+        </span>
+        <span class="mt">Conciliación</span>
+      </a>
+      <a href="#" onclick="navigateTo('centralizacion'); return false;" class="menu-item" id="menu-centralizacion">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 16v3a2 2 0 0 1-2 2H3V7a2 2 0 0 1 2-2h3"/><rect x="8" y="2" width="14" height="14" rx="2"/></svg>
+        </span>
+        <span class="mt">Centralización</span>
+      </a>
+      <a href="#" onclick="navigateTo('cierre'); return false;" class="menu-item" id="menu-cierre">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </span>
+        <span class="mt">Cierre Anual</span>
+      </a>
+    </div>
+    
+    <div class="menu-section">
+      <span class="menu-section-title">Gestión</span>
+      <a href="#" onclick="navigateTo('clientes'); return false;" class="menu-item" id="menu-clientes">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+        </span>
+        <span class="mt">Cobranza</span>
+      </a>
+      <a href="#" onclick="navigateTo('ficha'); return false;" class="menu-item" id="menu-ficha">
+        <span class="mi">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+        </span>
+        <span class="mt">Gestión Comercial</span>
+      </a>
+    </div>
+  </div>
+  
+  <div class="sidebar-footer">
+    <div class="user-info">
+      <div class="user-avatar" id="userAvatar">C</div>
+      <div class="user-meta">
+        <span class="user-email" id="userEmail"></span>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- Mobile toggle -->
+<button class="sidebar-toggle" id="sidebarToggle" onclick="document.getElementById('mainSidebar').classList.toggle('open')">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+</button>
+
+<script>
+var WEBAPP_URL = '';
+
+(function() {
+  // Get URL dynamically
+  google.script.run.withSuccessHandler(function(url) {
+    WEBAPP_URL = url;
+  }).getWebAppUrl();
+  
+  // Mark active menu
+  var urlParams = new URLSearchParams(window.location.search);
+  var page = urlParams.get('page') || 'contabilidad';
+  var menuItem = document.getElementById('menu-' + page);
+  if (menuItem) menuItem.classList.add('active');
+  
+  // Get user email
+  google.script.run.withSuccessHandler(function(email) {
+    if (email) {
+      document.getElementById('userEmail').textContent = email;
+      document.getElementById('userAvatar').textContent = email.charAt(0).toUpperCase();
+    }
+  }).getUserEmail();
+})();
+
+function navigateTo(page) {
+  if (WEBAPP_URL) {
+    window.top.location.href = WEBAPP_URL + '?page=' + page;
+  } else {
+    google.script.run.withSuccessHandler(function(url) {
+      window.top.location.href = url + '?page=' + page;
+    }).getWebAppUrl();
+  }
+}
+
+// ── CONTROL DE ACCESO ──
+var USER_ROLE = null;
+
+function checkUserRole(callback) {
+  if (USER_ROLE) { if (callback) callback(USER_ROLE); return; }
+  google.script.run.withSuccessHandler(function(r) {
+    USER_ROLE = r;
+    if (!r.esAdmin) aplicarModoConsulta();
+    if (callback) callback(r);
+  }).getUserRoleUI();
+}
+
+function aplicarModoConsulta() {
+  // Ocultar todos los elementos con clase 'admin-only'
+  var els = document.querySelectorAll('.admin-only');
+  for (var i = 0; i < els.length; i++) els[i].style.display = 'none';
+  
+  // Deshabilitar botones de acción
+  var btns = document.querySelectorAll('[data-admin]');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].disabled = true;
+    btns[i].title = 'Solo lectura — contacte al administrador';
+    btns[i].style.opacity = '0.4';
+    btns[i].style.pointerEvents = 'none';
+  }
+  
+  // Mostrar badge de consulta en sidebar
+  var footer = document.querySelector('.sidebar-footer .user-meta');
+  if (footer) {
+    var badge = document.createElement('span');
+    badge.style.cssText = 'display:inline-block;font-size:10px;font-weight:600;padding:1px 8px;border-radius:10px;background:#fef3c7;color:#d97706;margin-top:2px';
+    badge.textContent = '👁 Solo consulta';
+    footer.appendChild(badge);
+  }
+}
+
+// Auto-check role on every page load
+(function() {
+  var origLoad = window.onload;
+  window.onload = function() {
+    if (origLoad) origLoad();
+    checkUserRole();
+  };
+  // Also check immediately if DOM ready
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    checkUserRole();
+  }
+})();
+</script>

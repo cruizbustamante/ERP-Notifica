@@ -1,0 +1,1865 @@
+<script>
+// =============================================================================
+// ESTADO GLOBAL
+// =============================================================================
+var cbData = null;
+var cbMovimientos = [];
+var cbMovsFiltrados = [];
+var cbFiltroEstado = 'todos';   // todos | pendientes | contabilizados
+var cbFiltroTipo   = 'todos';   // todos | abonos | cargos
+var cbCuentasSelector = null;
+var cbCategoriasFlujo = [];
+var cbDocsPendientes = [];
+var cbMovsParaContab = []; // movimientos seleccionados para contabilizar
+var cbAuxTimer = null;
+var cbBusquedaTexto = '';
+var cbSortCol = 'fecha';
+var cbSortDir = 'desc'; // desc = más reciente primero
+var cbCuentaContraAtributos = null; // {requiereAuxiliar, requiereDocumento}
+var cbRefTipo = 'REGISTRO'; // REGISTRO o REBAJA — default registro para GASTO/INGRESO
+
+// =============================================================================
+// INICIALIZACIÓN
+// =============================================================================
+document.addEventListener('DOMContentLoaded', function() {
+  // Año selector
+  var selAño = document.getElementById('selAño');
+  var añoActual = new Date().getFullYear();
+  for (var a = añoActual + 1; a >= añoActual - 3; a--) {
+    var opt = document.createElement('option');
+    opt.value = a; opt.textContent = a;
+    if (a === añoActual) opt.selected = true;
+    selAño.appendChild(opt);
+  }
+  // Mes actual
+  document.getElementById('selMes').value = new Date().getMonth() + 1;
+  
+  // Cargar cuentas para selector
+  google.script.run.withSuccessHandler(function(r) {
+    cbCuentasSelector = r;
+  }).getCuentasContabUI();
+  
+  cbCargarDatos();
+});
+
+// =============================================================================
+// CARGA DE DATOS
+// =============================================================================
+function cbCargarDatos() {
+  var año = parseInt(document.getElementById('selAño').value);
+  cbShowLoading(true);
+  
+  google.script.run.withSuccessHandler(function(r) {
+    cbData = r;
+    cbCategoriasFlujo = cbData.categoriasFlujo || [];
+    cbPoblarSelectorFlujo();
+    document.getElementById('empresaLabel').textContent = cbData.empresaNombre || '';
+    cbActualizarKPIs(cbData.totales);
+    cbCargarMovimientos();
+  }).withFailureHandler(cbError).getDataCartolaBancariaUI(año);
+}
+
+function cbCargarMovimientos() {
+  var año = parseInt(document.getElementById('selAño').value);
+  var mes = parseInt(document.getElementById('selMes').value);
+  cbShowLoading(true);
+  
+  google.script.run.withSuccessHandler(function(r) {
+    var data = r;
+    cbMovimientos = data.movimientos || [];
+    cbActualizarKPIs(data.resumen);
+    cbAplicarFiltros();
+    // Init sort icon
+    var sortEl = document.getElementById('sortFecha');
+    if (sortEl) sortEl.textContent = cbSortDir === 'asc' ? ' ▲' : ' ▼';
+    cbShowLoading(false);
+  }).withFailureHandler(cbError).getMovimientosCartolaUI(año, mes);
+}
+
+// =============================================================================
+// KPIs
+// =============================================================================
+function cbActualizarKPIs(res) {
+  if (!res) return;
+  document.getElementById('kpiSaldoBanco').textContent = cbFmtMoney(res.saldoBanco || 0);
+  document.getElementById('kpiPendientes').textContent = res.pendientes || 0;
+  document.getElementById('kpiContabilizados').textContent = res.contabilizados || 0;
+  document.getElementById('kpiAbonos').textContent = cbFmtMoney(res.totalAbonos || 0);
+  document.getElementById('kpiCargos').textContent = cbFmtMoney(res.totalCargos || 0);
+}
+
+// =============================================================================
+// FILTROS + BÚSQUEDA + ORDENAMIENTO
+// =============================================================================
+function cbFiltrarEstado(f) {
+  cbFiltroEstado = f;
+  document.querySelectorAll('[data-filter-estado]').forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-filter-estado') === f);
+  });
+  cbAplicarFiltros();
+}
+
+function cbFiltrarTipo(f) {
+  cbFiltroTipo = f;
+  document.querySelectorAll('[data-filter-tipo]').forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-filter-tipo') === f);
+  });
+  cbAplicarFiltros();
+}
+
+function cbAplicarFiltros() {
+  // 1. Filtro estado
+  var arr = cbMovimientos.slice();
+  if (cbFiltroEstado === 'pendientes') {
+    arr = arr.filter(function(m) { return !m.contabilizado; });
+  } else if (cbFiltroEstado === 'contabilizados') {
+    arr = arr.filter(function(m) { return m.contabilizado; });
+  }
+  
+  // 2. Filtro tipo (se aplica ENCIMA del estado)
+  if (cbFiltroTipo === 'abonos') {
+    arr = arr.filter(function(m) { return m.esAbono; });
+  } else if (cbFiltroTipo === 'cargos') {
+    arr = arr.filter(function(m) { return !m.esAbono; });
+  }
+  
+  // 3. Aplicar búsqueda
+  if (cbBusquedaTexto) {
+    var q = cbBusquedaTexto.toLowerCase();
+    var qNum = parseFloat(q.replace(/[$.]/g, '').replace(',', '.'));
+    arr = arr.filter(function(m) {
+      if ((m.descripcion || '').toLowerCase().indexOf(q) !== -1) return true;
+      if ((m.nombreExtraido || '').toLowerCase().indexOf(q) !== -1) return true;
+      if ((m.rutExtraido || '').indexOf(q) !== -1) return true;
+      if ((m.nDoc || '').indexOf(q) !== -1) return true;
+      if ((m.idComprobante || '').toLowerCase().indexOf(q) !== -1) return true;
+      if (!isNaN(qNum) && qNum > 0) {
+        if (m.monto === qNum || m.monto === Math.round(qNum)) return true;
+        if (String(m.monto).indexOf(q) !== -1) return true;
+      }
+      return false;
+    });
+  }
+  
+  // 4. Ordenar
+  arr = cbSortArray(arr);
+  cbMovsFiltrados = arr;
+  
+  // Badges (sobre total, sin búsqueda)
+  var pend = cbMovimientos.filter(function(m) { return !m.contabilizado; }).length;
+  var contab = cbMovimientos.filter(function(m) { return m.contabilizado; }).length;
+  var abonos = cbMovimientos.filter(function(m) { return m.esAbono; }).length;
+  var cargos = cbMovimientos.filter(function(m) { return !m.esAbono; }).length;
+  document.getElementById('badgeTodos').textContent = cbMovimientos.length;
+  document.getElementById('badgePend').textContent = pend;
+  document.getElementById('badgeContab').textContent = contab;
+  document.getElementById('badgeAbonos').textContent = abonos;
+  document.getElementById('badgeCargos').textContent = cargos;
+  
+  cbRenderTabla();
+}
+
+// Búsqueda
+function cbBuscarTexto() {
+  var input = document.getElementById('cbBuscar');
+  cbBusquedaTexto = (input.value || '').trim();
+  document.getElementById('cbBuscarClear').style.display = cbBusquedaTexto ? 'block' : 'none';
+  cbAplicarFiltros();
+}
+
+function cbLimpiarBusqueda() {
+  document.getElementById('cbBuscar').value = '';
+  cbBusquedaTexto = '';
+  document.getElementById('cbBuscarClear').style.display = 'none';
+  cbAplicarFiltros();
+}
+
+// Ordenamiento
+function cbSort(col) {
+  if (cbSortCol === col) {
+    cbSortDir = cbSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    cbSortCol = col;
+    cbSortDir = col === 'monto' ? 'desc' : 'asc';
+  }
+  // Actualizar iconos
+  document.querySelectorAll('.cb-sort-icon').forEach(function(el) { el.textContent = ''; });
+  var iconId = 'sort' + col.charAt(0).toUpperCase() + col.slice(1);
+  var iconEl = document.getElementById(iconId);
+  if (iconEl) iconEl.textContent = cbSortDir === 'asc' ? ' ▲' : ' ▼';
+  cbAplicarFiltros();
+}
+
+function cbSortArray(arr) {
+  var col = cbSortCol;
+  var dir = cbSortDir === 'asc' ? 1 : -1;
+  
+  return arr.sort(function(a, b) {
+    var va, vb;
+    switch (col) {
+      case 'fecha':
+        va = a.fechaRaw || ''; vb = b.fechaRaw || '';
+        return va < vb ? -dir : va > vb ? dir : 0;
+      case 'tipo':
+        va = a.esAbono ? 1 : 0; vb = b.esAbono ? 1 : 0;
+        return (va - vb) * dir;
+      case 'desc':
+        va = (a.descripcion || '').toLowerCase(); vb = (b.descripcion || '').toLowerCase();
+        return va < vb ? -dir : va > vb ? dir : 0;
+      case 'rut':
+        va = a.rutExtraido || 'zzz'; vb = b.rutExtraido || 'zzz';
+        return va < vb ? -dir : va > vb ? dir : 0;
+      case 'monto':
+        return (a.monto - b.monto) * dir;
+      case 'estado':
+        va = a.contabilizado ? 1 : 0; vb = b.contabilizado ? 1 : 0;
+        return (va - vb) * dir;
+      default:
+        return 0;
+    }
+  });
+}
+
+// =============================================================================
+// RENDER TABLA
+// =============================================================================
+function cbRenderTabla() {
+  var tbody = document.getElementById('tbodyMovimientos');
+  document.getElementById('checkAll').checked = false;
+  cbActualizarSeleccion();
+  
+  if (cbMovsFiltrados.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="cb-empty">Sin movimientos para el período</td></tr>';
+    return;
+  }
+  
+  var html = '';
+  for (var i = 0; i < cbMovsFiltrados.length; i++) {
+    var m = cbMovsFiltrados[i];
+    var tipoClass = m.esAbono ? 'cb-tipo-abono' : 'cb-tipo-cargo';
+    var tipoLabel = m.esAbono ? 'ABONO' : 'CARGO';
+    var montoClass = m.esAbono ? 'cb-monto-pos' : 'cb-monto-neg';
+    var estadoClass = m.contabilizado ? 'cb-estado-ok' : 'cb-estado-pend';
+    var estadoLabel = m.contabilizado ? '✓ ' + (m.idComprobante || '') : 'Pendiente';
+    var rowClass = m.contabilizado ? 'cb-row-done' : '';
+    
+    html += '<tr class="' + rowClass + '" data-idx="' + i + '">';
+    html += '<td class="cb-col-check">';
+    if (!m.contabilizado) {
+      html += '<input type="checkbox" class="cb-check" data-idx="' + i + '" onchange="cbActualizarSeleccion()">';
+    }
+    html += '</td>';
+    html += '<td class="cb-col-fecha">' + (m.fecha || '—') + '</td>';
+    html += '<td class="cb-col-tipo"><span class="cb-tipo-badge ' + tipoClass + '">' + tipoLabel + '</span></td>';
+    html += '<td class="cb-col-desc">';
+    html += '<div class="cb-desc-main">' + cbTruncate(m.descripcion, 45) + '</div>';
+    if (m.nombreExtraido && m.nombreExtraido !== m.descripcion) {
+      html += '<div class="cb-desc-sub">' + cbTruncate(m.nombreExtraido, 35) + '</div>';
+    }
+    html += '</td>';
+    html += '<td class="cb-col-rut">' + (m.rutExtraido || '<span class="cb-rut-none">—</span>') + '</td>';
+    html += '<td class="cb-col-monto ' + montoClass + '">' + cbFmtMoney(m.monto) + '</td>';
+    html += '<td class="cb-col-saldo">' + cbFmtMoney(m.saldo) + '</td>';
+    html += '<td class="cb-col-estado"><span class="cb-estado ' + estadoClass + '">' + estadoLabel + '</span></td>';
+    html += '<td class="cb-col-acciones">';
+    if (!m.contabilizado) {
+      html += '<button class="cb-btn-icon" onclick="cbContabUno(' + i + ')" title="Contabilizar">📝</button>';
+    } else {
+      html += '<button class="cb-btn-icon cb-btn-danger" onclick="cbAnular(' + m.rowIndex + ')" title="Anular">✕</button>';
+    }
+    html += '</td>';
+    html += '</tr>';
+  }
+  
+  tbody.innerHTML = html;
+}
+
+// =============================================================================
+// SELECCIÓN
+// =============================================================================
+function cbToggleAll() {
+  var checked = document.getElementById('checkAll').checked;
+  document.querySelectorAll('.cb-check').forEach(function(cb) { cb.checked = checked; });
+  cbActualizarSeleccion();
+}
+
+function cbActualizarSeleccion() {
+  var checks = document.querySelectorAll('.cb-check:checked');
+  var count = checks.length;
+  var total = 0;
+  
+  checks.forEach(function(cb) {
+    var idx = parseInt(cb.getAttribute('data-idx'));
+    total += cbMovsFiltrados[idx].monto;
+  });
+  
+  document.getElementById('countSel').textContent = count;
+  document.getElementById('btnContabLote').disabled = count === 0;
+  
+  // Bottom bar
+  var bar = document.getElementById('bottomBar');
+  if (count > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('selInfo').textContent = count + ' movimiento(s) seleccionado(s)';
+    document.getElementById('selMonto').textContent = cbFmtMoney(total);
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function cbDeseleccionar() {
+  document.querySelectorAll('.cb-check').forEach(function(cb) { cb.checked = false; });
+  document.getElementById('checkAll').checked = false;
+  cbActualizarSeleccion();
+}
+
+// =============================================================================
+// CONTABILIZAR - MODAL
+// =============================================================================
+function cbContabUno(idx) {
+  cbMovsParaContab = [cbMovsFiltrados[idx]];
+  cbAbrirModalContab();
+}
+
+function cbAbrirContabLote() {
+  var checks = document.querySelectorAll('.cb-check:checked');
+  if (checks.length === 0) return;
+  
+  cbMovsParaContab = [];
+  checks.forEach(function(cb) {
+    var idx = parseInt(cb.getAttribute('data-idx'));
+    cbMovsParaContab.push(cbMovsFiltrados[idx]);
+  });
+  
+  cbAbrirModalContab();
+}
+
+function cbAbrirModalContab() {
+  var esBatch = cbMovsParaContab.length > 1;
+  var esAbono = cbMovsParaContab[0].esAbono;
+  // Check if all same type
+  var todosIgualTipo = cbMovsParaContab.every(function(m) { return m.esAbono === esAbono; });
+  
+  // Título
+  document.getElementById('modalContabTitulo').textContent = 
+    esBatch ? 'Contabilizar ' + cbMovsParaContab.length + ' Movimientos' : 'Contabilizar Movimiento';
+  
+  // Info del movimiento
+  if (!esBatch) {
+    var m = cbMovsParaContab[0];
+    document.getElementById('contabMovInfo').innerHTML = 
+      '<div class="cb-mov-card">' +
+        '<div class="cb-mov-card-header">' +
+          '<span class="cb-mov-card-fecha">' + m.fecha + '</span>' +
+          '<span class="cb-mov-card-monto ' + (m.esAbono ? 'cb-monto-pos' : 'cb-monto-neg') + '">' +
+            (m.esAbono ? '+' : '-') + cbFmtMoney(m.monto) +
+          '</span>' +
+        '</div>' +
+        '<div class="cb-mov-card-desc">' + m.descripcion + '</div>' +
+        (m.rutExtraido ? '<div class="cb-mov-card-rut">RUT: ' + m.rutExtraido + '</div>' : '') +
+      '</div>';
+    document.getElementById('contabMovInfo').style.display = 'block';
+    document.getElementById('contabLoteTable').style.display = 'none';
+  } else {
+    // Tabla batch
+    var total = 0;
+    var tableHtml = '<table class="cb-lote-table"><thead><tr>' +
+      '<th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Monto</th></tr></thead><tbody>';
+    for (var i = 0; i < cbMovsParaContab.length; i++) {
+      var m = cbMovsParaContab[i];
+      total += m.monto;
+      tableHtml += '<tr>' +
+        '<td>' + m.fecha + '</td>' +
+        '<td>' + cbTruncate(m.descripcion, 40) + '</td>' +
+        '<td><span class="cb-tipo-badge ' + (m.esAbono ? 'cb-tipo-abono' : 'cb-tipo-cargo') + '">' +
+          (m.esAbono ? 'ABONO' : 'CARGO') + '</span></td>' +
+        '<td class="' + (m.esAbono ? 'cb-monto-pos' : 'cb-monto-neg') + '">' + cbFmtMoney(m.monto) + '</td>' +
+        '</tr>';
+    }
+    tableHtml += '<tr class="cb-lote-total"><td colspan="3">Total</td><td>' + cbFmtMoney(total) + '</td></tr>';
+    tableHtml += '</tbody></table>';
+    
+    document.getElementById('contabLoteTable').innerHTML = tableHtml;
+    document.getElementById('contabLoteTable').style.display = 'block';
+    document.getElementById('contabMovInfo').style.display = 'none';
+  }
+  
+  // Opciones de tipo según si es abono o cargo
+  var selTipo = document.getElementById('contabTipo');
+  if (todosIgualTipo && esAbono) {
+    selTipo.innerHTML = '<option value="">— Seleccione —</option>' +
+      '<option value="COBRANZA">💰 Cobranza de Cliente</option>' +
+      '<option value="INGRESO">📥 Otro Ingreso</option>' +
+      '<option value="TRANSFERENCIA">🔄 Transferencia entre Cuentas</option>';
+  } else if (todosIgualTipo && !esAbono) {
+    selTipo.innerHTML = '<option value="">— Seleccione —</option>' +
+      '<option value="PAGO">💸 Pago a Proveedor</option>' +
+      '<option value="GASTO">📤 Gasto Directo</option>' +
+      '<option value="TRANSFERENCIA">🔄 Transferencia entre Cuentas</option>';
+  } else {
+    selTipo.innerHTML = '<option value="">— Seleccione —</option>' +
+      '<option value="COBRANZA">💰 Cobranza de Cliente</option>' +
+      '<option value="PAGO">💸 Pago a Proveedor</option>' +
+      '<option value="INGRESO">📥 Otro Ingreso</option>' +
+      '<option value="GASTO">📤 Gasto Directo</option>' +
+      '<option value="TRANSFERENCIA">🔄 Transferencia entre Cuentas</option>';
+  }
+  
+  // Pre-llenar RUT si hay
+  var rutPre = cbMovsParaContab[0].rutExtraido || '';
+  document.getElementById('contabRUT').value = rutPre;
+  document.getElementById('contabNombre').value = '';
+  document.getElementById('contabGlosa').value = 
+    esBatch ? '' : cbMovsParaContab[0].descripcion;
+  
+  // Si hay RUT, buscar nombre
+  if (rutPre) cbResolverRUT(rutPre);
+  
+  // Reset secciones
+  document.getElementById('grpCuentaContra').style.display = 'none';
+  document.getElementById('seccionAuxiliar').style.display = 'none';
+  document.getElementById('docsPendientesWrap').style.display = 'none';
+  document.getElementById('contabTipo').value = '';
+  document.getElementById('contabCatFlujo').value = '';
+  cbDocsPendientes = [];
+  cbCuentaContraAtributos = null;
+  cbRefTipo = 'REGISTRO';
+  cbLinAdReset();
+  document.getElementById('grpTipoRef').style.display = 'none';
+  document.getElementById('grpRegistroDoc').style.display = 'none';
+  document.getElementById('grpBuscarDocs').style.display = 'none';
+  
+  // Resumen
+  var totalMonto = cbMovsParaContab.reduce(function(s, m) { return s + m.monto; }, 0);
+  document.getElementById('contabResumen').textContent = 
+    cbMovsParaContab.length + ' mov. — ' + cbFmtMoney(totalMonto);
+  
+  cbAbrirModal('modalContab');
+}
+
+// =============================================================================
+// CATEGORÍA FLUJO DE EFECTIVO
+// =============================================================================
+
+// Pre-asignación por tipo de contabilización
+var FLUJO_MAP = {
+  'COBRANZA': 1,     // Cobros a clientes
+  'PAGO': 2,         // Pagos a proveedores
+  'GASTO': 6,        // Gastos operacionales (default, editable)
+  'INGRESO': 7,      // Otros operacionales (default, editable)
+  'TRANSFERENCIA': 0  // Sin categoría (no es flujo real)
+};
+
+function cbPoblarSelectorFlujo() {
+  var sel = document.getElementById('contabCatFlujo');
+  var html = '<option value="">— Sin categoría —</option>';
+  
+  var tipoActual = '';
+  for (var i = 0; i < cbCategoriasFlujo.length; i++) {
+    var cat = cbCategoriasFlujo[i];
+    if (cat.tipo !== tipoActual) {
+      if (tipoActual) html += '</optgroup>';
+      html += '<optgroup label="' + cat.tipo + '">';
+      tipoActual = cat.tipo;
+    }
+    html += '<option value="' + cat.codigo + '">' + cat.codigo + ' - ' + cat.nombre + '</option>';
+  }
+  if (tipoActual) html += '</optgroup>';
+  sel.innerHTML = html;
+}
+
+function cbPreFillFlujo(tipoContab) {
+  var code = FLUJO_MAP[tipoContab] || '';
+  var sel = document.getElementById('contabCatFlujo');
+  sel.value = String(code);
+  // Si no matchea (e.g. 0 para transferencia), dejar vacío
+  if (!sel.value && code) sel.value = '';
+}
+
+function cbCambiarTipo() {
+  var tipo = document.getElementById('contabTipo').value;
+  var esAuxiliar = (tipo === 'COBRANZA' || tipo === 'PAGO');
+  var esCuenta = (tipo === 'GASTO' || tipo === 'INGRESO' || tipo === 'TRANSFERENCIA');
+  
+  document.getElementById('seccionAuxiliar').style.display = esAuxiliar ? 'block' : 'none';
+  document.getElementById('grpCuentaContra').style.display = esCuenta ? 'block' : 'none';
+  document.getElementById('docsPendientesWrap').style.display = 'none';
+  cbDocsPendientes = [];
+  cbCuentaContraAtributos = null;
+  cbRefTipo = 'REGISTRO';
+  
+  // COBRANZA/PAGO → siempre modo REBAJA, sin toggle
+  if (esAuxiliar) {
+    document.getElementById('grpTipoRef').style.display = 'none';
+    document.getElementById('grpRegistroDoc').style.display = 'none';
+    document.getElementById('grpBuscarDocs').style.display = 'flex';
+    cbRefTipo = 'REBAJA';
+  } else {
+    document.getElementById('grpTipoRef').style.display = 'none';
+    document.getElementById('grpRegistroDoc').style.display = 'none';
+    document.getElementById('grpBuscarDocs').style.display = 'none';
+  }
+  
+  // Reset cuenta selector
+  if (esCuenta) {
+    document.getElementById('contabCuenta').value = '';
+  }
+  
+  // Popular selector de cuentas si necesario
+  if (esCuenta && cbCuentasSelector) {
+    cbPopularSelectorCuentas(tipo);
+  }
+  
+  // Pre-llenar categoría de flujo
+  cbPreFillFlujo(tipo);
+}
+
+function cbVerificarAtributosCuenta() {
+  var codigo = document.getElementById('contabCuenta').value;
+  var tipo = document.getElementById('contabTipo').value;
+  cbCuentaContraAtributos = null;
+  
+  // Para COBRANZA/PAGO el auxiliar ya se muestra por defecto (siempre REBAJA)
+  if (tipo === 'COBRANZA' || tipo === 'PAGO') return;
+  
+  // Ocultar todo si no hay cuenta
+  if (!codigo) {
+    document.getElementById('seccionAuxiliar').style.display = 'none';
+    document.getElementById('grpTipoRef').style.display = 'none';
+    document.getElementById('grpRegistroDoc').style.display = 'none';
+    document.getElementById('grpBuscarDocs').style.display = 'none';
+    return;
+  }
+  
+  google.script.run.withSuccessHandler(function(r) {
+    if (r && r.existe) {
+      cbCuentaContraAtributos = r;
+      if (r.requiereAuxiliar || r.requiereDocumento) {
+        document.getElementById('seccionAuxiliar').style.display = 'block';
+        document.getElementById('docsPendientesWrap').style.display = 'none';
+        
+        // Mostrar toggle REF si requiere documento
+        if (r.requiereDocumento) {
+          document.getElementById('grpTipoRef').style.display = 'flex';
+          cbCambiarRef('REGISTRO'); // default REGISTRO para GASTO/INGRESO
+        } else {
+          document.getElementById('grpTipoRef').style.display = 'none';
+          document.getElementById('grpRegistroDoc').style.display = 'none';
+          document.getElementById('grpBuscarDocs').style.display = 'none';
+        }
+        
+        // Pre-llenar RUT si el movimiento tiene uno
+        if (cbMovsParaContab.length > 0 && cbMovsParaContab[0].rutExtraido) {
+          document.getElementById('contabRUT').value = cbMovsParaContab[0].rutExtraido;
+          cbResolverRUT(cbMovsParaContab[0].rutExtraido);
+        }
+      } else {
+        document.getElementById('seccionAuxiliar').style.display = 'none';
+      }
+    }
+  }).verificarAtributosCuentaUI(codigo);
+}
+
+function cbCambiarRef(tipo) {
+  cbRefTipo = tipo;
+  
+  // Toggle buttons
+  document.getElementById('refBtnRegistro').classList.toggle('active', tipo === 'REGISTRO');
+  document.getElementById('refBtnRebaja').classList.toggle('active', tipo === 'REBAJA');
+  
+  // Show/hide sections
+  document.getElementById('grpRegistroDoc').style.display = tipo === 'REGISTRO' ? 'flex' : 'none';
+  document.getElementById('grpBuscarDocs').style.display = tipo === 'REBAJA' ? 'flex' : 'none';
+  document.getElementById('docsPendientesWrap').style.display = 'none';
+}
+
+function cbPopularSelectorCuentas(tipo) {
+  var sel = document.getElementById('contabCuenta');
+  sel.innerHTML = '<option value="">— Seleccione —</option>';
+  
+  var gruposOrden = [];
+  if (tipo === 'GASTO') gruposOrden = ['G', 'P', 'A'];
+  else if (tipo === 'INGRESO') gruposOrden = ['I', 'A', 'P'];
+  else gruposOrden = ['A', 'P', 'I', 'G', 'T']; // transferencia: cualquier cuenta
+  
+  for (var g = 0; g < gruposOrden.length; g++) {
+    var grupo = cbCuentasSelector[gruposOrden[g]];
+    if (!grupo || !grupo.cuentas || grupo.cuentas.length === 0) continue;
+    var optgroup = document.createElement('optgroup');
+    optgroup.label = grupo.nombre;
+    for (var c = 0; c < grupo.cuentas.length; c++) {
+      var ct = grupo.cuentas[c];
+      var opt = document.createElement('option');
+      opt.value = ct.codigo;
+      opt.textContent = ct.codigo + ' - ' + ct.nombre;
+      optgroup.appendChild(opt);
+    }
+    sel.appendChild(optgroup);
+  }
+}
+
+// =============================================================================
+// AUXILIAR - AUTOCOMPLETE
+// =============================================================================
+function cbBuscarAux(texto) {
+  clearTimeout(cbAuxTimer);
+  if (!texto || texto.length < 2) {
+    document.getElementById('auxSuggestions').style.display = 'none';
+    return;
+  }
+  cbAuxTimer = setTimeout(function() {
+    google.script.run.withSuccessHandler(function(r) {
+      var auxiliares = r;
+      var list = document.getElementById('auxSuggestions');
+      if (!auxiliares || auxiliares.length === 0) {
+        list.style.display = 'none'; return;
+      }
+      var html = '';
+      for (var i = 0; i < auxiliares.length; i++) {
+        var a = auxiliares[i];
+        html += '<div class="cb-autocomplete-item" onclick="cbSeleccionarAux(\'' + 
+                a.rut + '\',\'' + (a.nombre || '').replace(/'/g, "\\'") + '\')">' +
+                '<strong>' + a.rut + '</strong> ' + a.nombre + '</div>';
+      }
+      list.innerHTML = html;
+      list.style.display = 'block';
+    }).buscarAuxiliaresCartolaUI(texto);
+  }, 300);
+}
+
+function cbSeleccionarAux(rut, nombre) {
+  document.getElementById('contabRUT').value = rut;
+  document.getElementById('contabNombre').value = nombre;
+  document.getElementById('auxSuggestions').style.display = 'none';
+  // Auto-limpiar docs pendientes
+  document.getElementById('docsPendientesWrap').style.display = 'none';
+  cbDocsPendientes = [];
+}
+
+function cbResolverRUT(rut) {
+  google.script.run.withSuccessHandler(function(r) {
+    var auxiliares = r;
+    if (auxiliares && auxiliares.length > 0) {
+      document.getElementById('contabNombre').value = auxiliares[0].nombre || '';
+    }
+  }).buscarAuxiliaresCartolaUI(rut);
+}
+
+// =============================================================================
+// DOCUMENTOS PENDIENTES
+// =============================================================================
+function cbBuscarPendientes() {
+  var rut = document.getElementById('contabRUT').value;
+  if (!rut) { cbToast('Ingrese un RUT primero', 'error'); return; }
+  
+  var tipo = document.getElementById('contabTipo').value;
+  
+  // Determinar cuenta(s) para buscar docs
+  var cuentas = [];
+  if (tipo === 'COBRANZA') {
+    cuentas = ['1-1-03-001', '1-1-03-002']; // Clientes + Clientes Boletas
+  } else if (tipo === 'PAGO') {
+    cuentas = ['2-1-02-001', '2-1-04-001']; // Proveedores + Honorarios por Pagar
+  } else if (cbCuentaContraAtributos && cbCuentaContraAtributos.requiereDocumento) {
+    cuentas = [document.getElementById('contabCuenta').value];
+  }
+  
+  if (cuentas.length === 0) { cbToast('No aplica búsqueda de documentos para este tipo', 'info'); return; }
+  
+  cbToast('Buscando documentos...', 'info');
+  
+  // Buscar en todas las cuentas y combinar
+  var pendiente = cuentas.length;
+  var todosDocumentos = [];
+  var totalSaldo = 0;
+  var huboError = false;
+  
+  for (var c = 0; c < cuentas.length; c++) {
+    (function(cuenta) {
+      google.script.run.withSuccessHandler(function(r) {
+        pendiente--;
+        if (!r.error && r.documentos && r.documentos.length > 0) {
+          // Marcar la cuenta origen en cada doc
+          for (var d = 0; d < r.documentos.length; d++) {
+            r.documentos[d]._cuentaOrigen = cuenta;
+          }
+          todosDocumentos = todosDocumentos.concat(r.documentos);
+          totalSaldo += (r.totalSaldo || 0);
+        }
+        
+        if (pendiente === 0) {
+          cbDocsPendientes = todosDocumentos;
+          
+          if (cbDocsPendientes.length === 0) {
+            cbToast('Sin documentos pendientes para este auxiliar', 'info');
+            document.getElementById('docsPendientesWrap').style.display = 'none';
+            return;
+          }
+          
+          cbRenderDocsPendientes();
+          document.getElementById('docsPendientesWrap').style.display = 'block';
+          document.getElementById('docsPendTotal').textContent = 
+            cbDocsPendientes.length + ' docs — ' + cbFmtMoney(totalSaldo);
+        }
+      }).withFailureHandler(function(e) {
+        pendiente--;
+        if (pendiente === 0 && todosDocumentos.length === 0) {
+          cbToast('Error buscando documentos: ' + e.message, 'error');
+        }
+      }).getDocsPendientesCartUI(cuenta, rut);
+    })(cuentas[c]);
+  }
+}
+
+function cbRenderDocsPendientes() {
+  var tbody = document.getElementById('tbodyDocsPend');
+  var montoMov = cbMovsParaContab.reduce(function(s, m) { return s + m.monto; }, 0);
+  var html = '';
+  
+  for (var i = 0; i < cbDocsPendientes.length; i++) {
+    var d = cbDocsPendientes[i];
+    html += '<tr>' +
+      '<td><input type="checkbox" class="cb-doc-check" data-idx="' + i + '" onchange="cbRecalcDocs()" checked></td>' +
+      '<td>' + (d.tipoDoc || '—') + '</td>' +
+      '<td>' + (d.numDoc || '—') + '</td>' +
+      '<td>' + (d.fechaDoc ? cbFmtDate(d.fechaDoc) : '—') + '</td>' +
+      '<td class="cb-text-right">' + cbFmtMoney(d.montoOriginal) + '</td>' +
+      '<td class="cb-text-right">' + cbFmtMoney(d.saldo) + '</td>' +
+      '<td><input type="number" class="cb-input-monto" data-idx="' + i + '" ' +
+        'value="' + Math.min(d.saldo, montoMov) + '" onchange="cbRecalcDocs()" step="1"></td>' +
+      '</tr>';
+    montoMov -= Math.min(d.saldo, montoMov);
+    if (montoMov <= 0) montoMov = 0;
+  }
+  
+  tbody.innerHTML = html;
+  cbRecalcDocs();
+}
+
+function cbToggleAllDocs() {
+  var checked = document.getElementById('checkAllDocs').checked;
+  document.querySelectorAll('.cb-doc-check').forEach(function(cb) { cb.checked = checked; });
+  cbRecalcDocs();
+}
+
+function cbRecalcDocs() {
+  var total = 0;
+  document.querySelectorAll('.cb-doc-check:checked').forEach(function(cb) {
+    var idx = parseInt(cb.getAttribute('data-idx'));
+    var input = document.querySelector('.cb-input-monto[data-idx="' + idx + '"]');
+    total += parseFloat(input.value) || 0;
+  });
+  
+  var montoMov = cbMovsParaContab.reduce(function(s, m) { return s + m.monto; }, 0);
+  var dif = montoMov - total;
+  
+  document.getElementById('totalAplicar').textContent = cbFmtMoney(total);
+  var difEl = document.getElementById('difAplicar');
+  difEl.textContent = cbFmtMoney(dif);
+  difEl.style.color = Math.abs(dif) < 1 ? '#10b981' : '#ef4444';
+  
+  // Si hay diferencia → auto-abrir líneas adicionales con aviso
+  var aviso = document.getElementById('linAdDifAviso');
+  if (Math.abs(dif) >= 1) {
+    document.getElementById('secLineasAdicionales').style.display = 'block';
+    document.getElementById('btnToggleLinAd').textContent = '✕ Ocultar líneas adicionales';
+    if (aviso) {
+      aviso.style.display = 'block';
+      document.getElementById('linAdDifMonto').textContent = cbFmtMoney(dif);
+    }
+    if (cbLinAd.length === 0) cbLinAdAgregar();
+  } else {
+    if (aviso) aviso.style.display = 'none';
+  }
+  // Actualizar indicador de cuadratura
+  cbLinAdTotales();
+}
+
+
+// =============================================================================
+// LÍNEAS ADICIONALES AL COMPROBANTE (mini-comprobante)
+// =============================================================================
+var cbLinAd = []; // [{cuenta, debe, haber, glosa, auxiliar, auxNombre, tipoDoc, numDoc, refTipo, refNum, _attrs:{}}]
+var _linAdAuxTimer = null;
+
+function cbToggleLinAd() {
+  var sec = document.getElementById('secLineasAdicionales');
+  var btn = document.getElementById('btnToggleLinAd');
+  if (sec.style.display === 'none') {
+    sec.style.display = 'block';
+    btn.textContent = '✕ Ocultar líneas adicionales';
+    if (cbLinAd.length === 0) cbLinAdAgregar();
+  } else {
+    sec.style.display = 'none';
+    btn.textContent = '➕ Agregar líneas adicionales al comprobante';
+  }
+}
+
+function cbLinAdAgregar() {
+  cbLinAd.push({ cuenta: '', debe: '', haber: '', glosa: '', auxiliar: '', auxNombre: '',
+    tipoDoc: '', numDoc: '', refTipo: '', refNum: '', refMode: 'REGISTRO',
+    _attrs: {}, _docs: [], _docsLoaded: false });
+  cbLinAdRender();
+}
+
+function cbLinAdRemover(idx) {
+  cbLinAd.splice(idx, 1);
+  if (cbLinAd.length === 0) {
+    document.getElementById('linAdContainer').innerHTML = '';
+    document.getElementById('linAdTotales').innerHTML = '';
+  } else {
+    cbLinAdRender();
+  }
+}
+
+function cbLinAdRender() {
+  var cont = document.getElementById('linAdContainer');
+  if (!cont) return;
+  
+  // Build cuenta options from cbCuentasSelector (grouped by type)
+  var optsCta = '<option value="">— Cuenta —</option>';
+  if (cbCuentasSelector) {
+    var gKeys = ['A','P','T','I','G'];
+    for (var g = 0; g < gKeys.length; g++) {
+      var grupo = cbCuentasSelector[gKeys[g]];
+      if (!grupo || !grupo.cuentas || grupo.cuentas.length === 0) continue;
+      optsCta += '<optgroup label="' + grupo.nombre + '">';
+      for (var c = 0; c < grupo.cuentas.length; c++) {
+        var cm = grupo.cuentas[c];
+        optsCta += '<option value="' + cm.codigo + '" data-aux="' + (cm.requiereAuxiliar ? '1' : '') + '" data-doc="' + (cm.requiereDocumento ? '1' : '') + '">' + cm.codigo + ' - ' + cm.nombre + '</option>';
+      }
+      optsCta += '</optgroup>';
+    }
+  }
+  
+  var html = '';
+  for (var i = 0; i < cbLinAd.length; i++) {
+    var ln = cbLinAd[i];
+    var a = ln._attrs || {};
+    html += '<div class="linad-card" style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px">';
+    
+    // Row 1: Cuenta + Debe + Haber + delete
+    html += '<div style="display:flex;gap:6px;align-items:center">';
+    html += '<select class="linad-cuenta" data-idx="' + i + '" onchange="cbLinAdCuentaChange(' + i + ')" style="flex:3;padding:5px;font-size:12px;border:1px solid #cbd5e1;border-radius:4px">';
+    var re = new RegExp('value="' + ln.cuenta + '"');
+    html += optsCta.replace(re, 'value="' + ln.cuenta + '" selected');
+    html += '</select>';
+    html += '<input type="number" class="linad-debe" data-idx="' + i + '" placeholder="Debe" value="' + (ln.debe || '') + '" oninput="cbLinAdSync(' + i + ')" onchange="cbLinAdSync(' + i + ')" style="flex:0 0 85px;padding:5px;font-size:12px;text-align:right;border:1px solid #cbd5e1;border-radius:4px">';
+    html += '<input type="number" class="linad-haber" data-idx="' + i + '" placeholder="Haber" value="' + (ln.haber || '') + '" oninput="cbLinAdSync(' + i + ')" onchange="cbLinAdSync(' + i + ')" style="flex:0 0 85px;padding:5px;font-size:12px;text-align:right;border:1px solid #cbd5e1;border-radius:4px">';
+    html += '<button onclick="cbLinAdRemover(' + i + ')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;flex:0 0 24px">🗑</button>';
+    html += '</div>';
+    
+    // Row 2: Auxiliar (if needed)
+    if (a.requiereAuxiliar) {
+      var auxVal = ln.auxiliar ? (ln.auxiliar + (ln.auxNombre ? ' - ' + ln.auxNombre : '')) : '';
+      var auxBorder = ln.auxiliar ? '#86efac' : '#cbd5e1';
+      var auxBg = ln.auxiliar ? '#f0fdf4' : '#fff';
+      html += '<div style="display:flex;gap:6px;margin-top:6px;position:relative">';
+      html += '<div style="flex:1;position:relative">';
+      html += '<input type="text" class="linad-auxinput" data-idx="' + i + '" value="' + auxVal + '" placeholder="🔍 Buscar RUT o nombre auxiliar..." oninput="cbLinAdBuscarAux(' + i + ',this)" onfocus="cbLinAdBuscarAux(' + i + ',this)" style="width:100%;padding:5px 8px;font-size:12px;border:1px solid ' + auxBorder + ';border-radius:4px;background:' + auxBg + '">';
+      html += '<div class="linad-auxdd" id="linAdAuxDD' + i + '" style="display:none;position:absolute;z-index:200;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);max-height:160px;overflow-y:auto;width:100%;left:0;top:100%"></div>';
+      html += '</div>';
+      html += '<input type="text" class="linad-glosa" data-idx="' + i + '" placeholder="Glosa" value="' + (ln.glosa || '') + '" onchange="cbLinAdSync(' + i + ')" style="flex:1;padding:5px;font-size:12px;border:1px solid #cbd5e1;border-radius:4px">';
+      html += '</div>';
+    } else {
+      html += '<div style="margin-top:6px"><input type="text" class="linad-glosa" data-idx="' + i + '" placeholder="Glosa" value="' + (ln.glosa || '') + '" onchange="cbLinAdSync(' + i + ')" style="width:100%;padding:5px;font-size:12px;border:1px solid #cbd5e1;border-radius:4px"></div>';
+    }
+    
+    // Row 3: Documentos (if needed)
+    if (a.requiereDocumento && ln.auxiliar) {
+      html += '<div style="margin-top:6px">';
+      // Ref mode toggle
+      html += '<div style="display:flex;gap:0;margin-bottom:6px">';
+      html += '<button onclick="cbLinAdRefMode(' + i + ',\'REGISTRO\')" style="flex:1;padding:4px;font-size:11px;border:1px solid #cbd5e1;cursor:pointer;border-radius:4px 0 0 4px;' + (ln.refMode === 'REGISTRO' ? 'background:#1a1a4e;color:white' : 'background:#fff;color:#475569') + '">📝 Registro</button>';
+      html += '<button onclick="cbLinAdRefMode(' + i + ',\'REBAJA\')" style="flex:1;padding:4px;font-size:11px;border:1px solid #cbd5e1;cursor:pointer;border-radius:0 4px 4px 0;' + (ln.refMode === 'REBAJA' ? 'background:#1a1a4e;color:white' : 'background:#fff;color:#475569') + '">🔗 Rebaja doc</button>';
+      html += '</div>';
+      
+      if (ln.refMode === 'REGISTRO') {
+        // Manual doc entry
+        html += '<div style="display:flex;gap:6px">';
+        html += '<input type="text" class="linad-tipodoc" data-idx="' + i + '" placeholder="Tipo (EG, DP...)" value="' + (ln.tipoDoc || '') + '" onchange="cbLinAdSync(' + i + ')" style="flex:0 0 100px;padding:4px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px">';
+        html += '<input type="text" class="linad-numdoc" data-idx="' + i + '" placeholder="N° documento" value="' + (ln.numDoc || '') + '" onchange="cbLinAdSync(' + i + ')" style="flex:1;padding:4px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px">';
+        html += '</div>';
+      } else {
+        // REBAJA: search pending docs
+        if (!ln._docsLoaded) {
+          html += '<button onclick="cbLinAdCargarDocs(' + i + ')" style="padding:4px 12px;font-size:11px;border:1px solid #6366f1;color:#6366f1;background:#fff;border-radius:4px;cursor:pointer">🔍 Buscar Docs Pendientes</button>';
+        } else if (ln._docs.length === 0) {
+          html += '<div style="font-size:11px;color:#94a3b8;padding:4px">Sin documentos pendientes</div>';
+        } else {
+          html += '<div style="max-height:120px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:4px">';
+          html += '<table style="width:100%;font-size:11px;border-collapse:collapse"><thead><tr style="background:#f1f5f9">';
+          html += '<th style="padding:3px 6px;text-align:left">Tipo</th><th style="padding:3px 6px">N° Doc</th><th style="padding:3px 6px">Fecha</th><th style="padding:3px 6px;text-align:right">Saldo</th><th style="padding:3px 6px;text-align:center">Sel</th>';
+          html += '</tr></thead><tbody>';
+          for (var d = 0; d < ln._docs.length; d++) {
+            var doc = ln._docs[d];
+            var isSel = (ln.refTipo === doc.tipoDoc && String(ln.refNum) === String(doc.numDoc));
+            html += '<tr style="border-bottom:1px solid #f1f5f9;cursor:pointer;' + (isSel ? 'background:#ede9fe' : '') + '" onclick="cbLinAdSelDoc(' + i + ',' + d + ')">';
+            html += '<td style="padding:3px 6px">' + (doc.tipoDoc || '') + '</td>';
+            html += '<td style="padding:3px 6px">' + (doc.numDoc || '') + '</td>';
+            html += '<td style="padding:3px 6px">' + (doc.fechaDoc ? cbFmtDate(doc.fechaDoc) : '') + '</td>';
+            html += '<td style="padding:3px 6px;text-align:right">' + cbFmtMoney(doc.saldo) + '</td>';
+            html += '<td style="padding:3px 6px;text-align:center">' + (isSel ? '✅' : '○') + '</td>';
+            html += '</tr>';
+          }
+          html += '</tbody></table></div>';
+          if (ln.refTipo && ln.refNum) {
+            html += '<div style="font-size:11px;color:#7c3aed;margin-top:3px">↳ Rebaja: ' + ln.refTipo + ' ' + ln.refNum + '</div>';
+          }
+        }
+      }
+      html += '</div>';
+    }
+    
+    html += '</div>'; // end card
+  }
+  cont.innerHTML = html;
+  cbLinAdTotales();
+  
+  // Close aux dropdowns on outside click
+  document.addEventListener('click', function(e) {
+    if (!e.target.classList.contains('linad-auxinput')) {
+      var dds = document.querySelectorAll('.linad-auxdd');
+      for (var d = 0; d < dds.length; d++) dds[d].style.display = 'none';
+    }
+  });
+}
+
+function cbLinAdCuentaChange(idx) {
+  var sel = document.querySelectorAll('.linad-cuenta')[idx];
+  if (!sel) return;
+  var opt = sel.options[sel.selectedIndex];
+  cbLinAd[idx].cuenta = sel.value;
+  cbLinAd[idx]._attrs = {
+    requiereAuxiliar: opt.getAttribute('data-aux') === '1',
+    requiereDocumento: opt.getAttribute('data-doc') === '1'
+  };
+  // Reset doc data when account changes
+  cbLinAd[idx]._docs = [];
+  cbLinAd[idx]._docsLoaded = false;
+  cbLinAd[idx].refTipo = '';
+  cbLinAd[idx].refNum = '';
+  cbLinAdRender();
+}
+
+function cbLinAdBuscarAux(idx, input) {
+  var texto = input.value.trim();
+  var dd = document.getElementById('linAdAuxDD' + idx);
+  if (!texto) {
+    cbLinAd[idx].auxiliar = '';
+    cbLinAd[idx].auxNombre = '';
+    input.style.borderColor = '#cbd5e1';
+    input.style.background = '#fff';
+    dd.style.display = 'none';
+    return;
+  }
+  clearTimeout(_linAdAuxTimer);
+  _linAdAuxTimer = setTimeout(function() {
+    google.script.run.withSuccessHandler(function(res) {
+      if (!res || res.length === 0) {
+        dd.innerHTML = '<div style="padding:6px 10px;color:#94a3b8;font-size:11px">Sin resultados</div>';
+        dd.style.display = 'block';
+        return;
+      }
+      var h = '';
+      for (var i = 0; i < res.length; i++) {
+        h += '<div onclick="cbLinAdSelAux(' + idx + ',\'' + (res[i].rut || '').replace(/'/g, "\\'") + '\',\'' + (res[i].nombre || '').replace(/'/g, "\\'") + '\')" style="padding:5px 10px;cursor:pointer;font-size:11px;border-bottom:1px solid #f1f5f9" onmouseover="this.style.background=\'#f0f4ff\'" onmouseout="this.style.background=\'#fff\'">';
+        h += '<strong>' + (res[i].rut || '') + '</strong> — ' + (res[i].nombre || '');
+        h += '</div>';
+      }
+      dd.innerHTML = h;
+      dd.style.display = 'block';
+    }).buscarAuxiliaresCartolaUI(texto);
+  }, 300);
+}
+
+function cbLinAdSelAux(idx, rut, nombre) {
+  cbLinAd[idx].auxiliar = rut;
+  cbLinAd[idx].auxNombre = nombre;
+  cbLinAd[idx]._docs = [];
+  cbLinAd[idx]._docsLoaded = false;
+  cbLinAdRender();
+}
+
+function cbLinAdRefMode(idx, mode) {
+  cbLinAdSyncAll();
+  cbLinAd[idx].refMode = mode;
+  if (mode === 'REGISTRO') {
+    cbLinAd[idx].refTipo = '';
+    cbLinAd[idx].refNum = '';
+  }
+  cbLinAdRender();
+}
+
+function cbLinAdCargarDocs(idx) {
+  var ln = cbLinAd[idx];
+  if (!ln.cuenta || !ln.auxiliar) { cbToast('Seleccione cuenta y auxiliar primero', 'error'); return; }
+  
+  google.script.run.withSuccessHandler(function(docs) {
+    ln._docs = (docs || []).filter(function(d) { return d.saldo > 0; });
+    ln._docsLoaded = true;
+    cbLinAdRender();
+  }).withFailureHandler(function(e) {
+    cbToast('Error: ' + e.message, 'error');
+  }).getDocsPendientesCartUI(ln.cuenta, ln.auxiliar);
+}
+
+function cbLinAdSelDoc(idx, docIdx) {
+  var doc = cbLinAd[idx]._docs[docIdx];
+  if (!doc) return;
+  // Toggle selection
+  if (cbLinAd[idx].refTipo === doc.tipoDoc && String(cbLinAd[idx].refNum) === String(doc.numDoc)) {
+    cbLinAd[idx].refTipo = '';
+    cbLinAd[idx].refNum = '';
+    cbLinAd[idx].debe = '';
+    cbLinAd[idx].haber = '';
+  } else {
+    cbLinAd[idx].refTipo = doc.tipoDoc;
+    cbLinAd[idx].refNum = String(doc.numDoc);
+    cbLinAd[idx].tipoDoc = doc.tipoDoc;
+    cbLinAd[idx].numDoc = String(doc.numDoc);
+    // Auto-fill monto based on account type
+    var monto = doc.saldo;
+    // For Activos (rebaja = haber), for Pasivos (rebaja = debe)
+    var primerDigito = cbLinAd[idx].cuenta.charAt(0);
+    if (primerDigito === '1') { // Activo: rebaja al haber
+      cbLinAd[idx].haber = monto;
+      cbLinAd[idx].debe = '';
+    } else { // Pasivo: rebaja al debe
+      cbLinAd[idx].debe = monto;
+      cbLinAd[idx].haber = '';
+    }
+  }
+  cbLinAdRender();
+}
+
+function cbLinAdSync(idx) {
+  var debes = document.querySelectorAll('.linad-debe');
+  var haberes = document.querySelectorAll('.linad-haber');
+  var glosas = document.querySelectorAll('.linad-glosa');
+  var tipodocs = document.querySelectorAll('.linad-tipodoc');
+  var numdocs = document.querySelectorAll('.linad-numdoc');
+  if (cbLinAd[idx]) {
+    cbLinAd[idx].debe = debes[idx] ? debes[idx].value : '';
+    cbLinAd[idx].haber = haberes[idx] ? haberes[idx].value : '';
+    cbLinAd[idx].glosa = glosas[idx] ? glosas[idx].value : '';
+    if (tipodocs[idx]) cbLinAd[idx].tipoDoc = tipodocs[idx].value;
+    if (numdocs[idx]) cbLinAd[idx].numDoc = numdocs[idx].value;
+  }
+  cbLinAdTotales();
+}
+
+function cbLinAdSyncAll() {
+  for (var i = 0; i < cbLinAd.length; i++) cbLinAdSync(i);
+}
+
+function cbLinAdTotales() {
+  var debes = document.querySelectorAll('.linad-debe');
+  var haberes = document.querySelectorAll('.linad-haber');
+  var td = 0, th = 0;
+  for (var i = 0; i < debes.length; i++) {
+    td += parseFloat(debes[i].value) || 0;
+    th += parseFloat(haberes[i].value) || 0;
+  }
+  var el = document.getElementById('linAdTotales');
+  if (el) {
+    el.innerHTML = (td > 0 || th > 0) ? 'Líneas adic. — Debe: ' + cbFmtMoney(td) + ' | Haber: ' + cbFmtMoney(th) : '';
+  }
+  
+  // ── Mostrar indicador de cuadratura ──
+  var cuadraEl = document.getElementById('linAdCuadra');
+  if (!cuadraEl) return;
+  
+  // Solo mostrar si hay líneas adicionales con montos
+  if (cbLinAd.length === 0 || (td === 0 && th === 0)) { cuadraEl.style.display = 'none'; return; }
+  
+  var montoBanco = cbMovsParaContab.reduce(function(s, m) { return s + m.monto; }, 0);
+  var esAbono = cbMovsParaContab.length > 0 && cbMovsParaContab[0].esAbono;
+  var netLinAd = td - th;
+  var descuadre = 0;
+  
+  if (cbRefTipo === 'REBAJA') {
+    // Calcular diferencia actual (banco - docs)
+    var totalDocs = 0;
+    document.querySelectorAll('.cb-doc-check:checked').forEach(function(cb) {
+      var idx = parseInt(cb.getAttribute('data-idx'));
+      var input = document.querySelector('.cb-input-monto[data-idx="' + idx + '"]');
+      totalDocs += parseFloat(input.value) || 0;
+    });
+    var dif = montoBanco - totalDocs;
+    // esAbono: banco DEBE → descuadre = dif + netLinAd
+    // !esAbono: banco HABER → descuadre = -dif + netLinAd
+    descuadre = esAbono ? (dif + netLinAd) : (-dif + netLinAd);
+  } else {
+    // REGISTRO: comprobante base ya cuadra, lineas adicionales deben netear a 0
+    descuadre = netLinAd;
+  }
+  
+  cuadraEl.style.display = 'block';
+  if (Math.abs(descuadre) < 1) {
+    cuadraEl.innerHTML = '<span style="color:#059669;font-weight:700">✅ Comprobante cuadra</span>';
+  } else {
+    cuadraEl.innerHTML = '<span style="color:#dc2626;font-weight:700">⚠️ Descuadre: ' + cbFmtMoney(descuadre) + '</span>';
+  }
+}
+
+function cbLinAdReset() {
+  cbLinAd = [];
+  var sec = document.getElementById('secLineasAdicionales');
+  if (sec) sec.style.display = 'none';
+  var btn = document.getElementById('btnToggleLinAd');
+  if (btn) btn.textContent = '➕ Agregar líneas adicionales al comprobante';
+  var cont = document.getElementById('linAdContainer');
+  if (cont) cont.innerHTML = '';
+  var tot = document.getElementById('linAdTotales');
+  if (tot) tot.innerHTML = '';
+  var aviso = document.getElementById('linAdDifAviso');
+  if (aviso) aviso.style.display = 'none';
+  var cuadra = document.getElementById('linAdCuadra');
+  if (cuadra) cuadra.style.display = 'none';
+}
+
+function cbLinAdRecoger() {
+  cbLinAdSyncAll();
+  var lineas = [];
+  for (var i = 0; i < cbLinAd.length; i++) {
+    var ln = cbLinAd[i];
+    var d = Math.round(parseFloat(ln.debe) || 0);
+    var h = Math.round(parseFloat(ln.haber) || 0);
+    if (ln.cuenta && (d > 0 || h > 0)) {
+      var out = { cuenta: ln.cuenta, debe: d, haber: h, glosa: ln.glosa || '' };
+      if (ln.auxiliar) out.auxiliar = ln.auxiliar;
+      if (ln.refMode === 'REBAJA' && ln.refTipo && ln.refNum) {
+        out.refTipo = ln.refTipo;
+        out.refNum = String(ln.refNum);
+      } else if (ln.refMode === 'REGISTRO' && ln.tipoDoc && ln.numDoc) {
+        out.tipoDoc = ln.tipoDoc;
+        out.numDoc = String(ln.numDoc);
+      }
+      lineas.push(out);
+    }
+  }
+  return lineas;
+}
+
+// =============================================================================
+// EJECUTAR CONTABILIZACIÓN
+// =============================================================================
+function cbEjecutarContab() {
+  var tipo = document.getElementById('contabTipo').value;
+  if (!tipo) { cbToast('Seleccione el tipo de movimiento', 'error'); return; }
+  
+  var auxiliar = document.getElementById('contabRUT').value;
+  var glosa = document.getElementById('contabGlosa').value;
+  var cuentaContra = document.getElementById('contabCuenta').value;
+  
+  // Validaciones según tipo
+  if ((tipo === 'COBRANZA' || tipo === 'PAGO') && !auxiliar) {
+    cbToast('Ingrese el RUT del auxiliar', 'error'); return;
+  }
+  if ((tipo === 'GASTO' || tipo === 'INGRESO' || tipo === 'TRANSFERENCIA') && !cuentaContra) {
+    cbToast('Seleccione la cuenta contrapartida', 'error'); return;
+  }
+  // Si la cuenta contrapartida requiere auxiliar, validar
+  if (cbCuentaContraAtributos && cbCuentaContraAtributos.requiereAuxiliar && !auxiliar) {
+    cbToast('La cuenta ' + cuentaContra + ' requiere auxiliar (RUT)', 'error'); return;
+  }
+  
+  // Recoger docs pendientes seleccionados (REBAJA mode)
+  var docsSeleccionados = [];
+  var usaRebaja = (tipo === 'COBRANZA' || tipo === 'PAGO') || 
+                  (cbCuentaContraAtributos && cbRefTipo === 'REBAJA');
+  
+  // Validar cuadratura si hay líneas adicionales
+  var extras = cbLinAdRecoger();
+  if (extras.length > 0 && usaRebaja) {
+    var montoBanco = cbMovsParaContab.reduce(function(s, m) { return s + m.monto; }, 0);
+    var totalDocs = 0;
+    document.querySelectorAll('.cb-doc-check:checked').forEach(function(cb) {
+      var idx = parseInt(cb.getAttribute('data-idx'));
+      var input = document.querySelector('.cb-input-monto[data-idx="' + idx + '"]');
+      totalDocs += parseFloat(input.value) || 0;
+    });
+    var dif = montoBanco - totalDocs;
+    var esAbono = cbMovsParaContab.length > 0 && cbMovsParaContab[0].esAbono;
+    var tdAd = 0, thAd = 0;
+    for (var e = 0; e < extras.length; e++) { tdAd += extras[e].debe || 0; thAd += extras[e].haber || 0; }
+    var descuadre = esAbono ? (dif + tdAd - thAd) : (-dif + tdAd - thAd);
+    if (Math.abs(descuadre) >= 1) {
+      cbToast('Comprobante descuadrado por ' + cbFmtMoney(descuadre) + '. Ajuste las líneas adicionales.', 'error');
+      return;
+    }
+  }
+  
+  if (usaRebaja) {
+    document.querySelectorAll('.cb-doc-check:checked').forEach(function(cb) {
+      var idx = parseInt(cb.getAttribute('data-idx'));
+      var input = document.querySelector('.cb-input-monto[data-idx="' + idx + '"]');
+      var doc = cbDocsPendientes[idx];
+      docsSeleccionados.push({
+        tipoDoc: doc.tipoDoc || 'FAC',
+        numDoc: doc.numDoc || '',
+        monto: parseFloat(input.value) || doc.saldo,
+        cuentaOrigen: doc._cuentaOrigen || ''
+      });
+    });
+  }
+  
+  // Datos de REGISTRO (tipo doc y número para documentos nuevos)
+  var regTipoDoc = '';
+  var regNumDoc = '';
+  if (cbCuentaContraAtributos && cbRefTipo === 'REGISTRO') {
+    regTipoDoc = document.getElementById('contabRegTipoDoc').value || 'ANT';
+    regNumDoc = document.getElementById('contabRegNumDoc').value || '';
+  }
+  
+  // Categoría flujo de efectivo
+  var catFlujoVal = document.getElementById('contabCatFlujo').value;
+  var categoriaFlujo = catFlujoVal ? parseInt(catFlujoVal) : '';
+  
+  // Construir array de movimientos
+  var movimientos = [];
+  
+  // Para REBAJA: distribuir docs entre movimientos según monto de cada uno
+  var docsDistribuidos = [];
+  if (usaRebaja && docsSeleccionados.length > 0 && cbMovsParaContab.length > 0) {
+    
+    if (cbMovsParaContab.length === 1) {
+      // Un solo movimiento: asignar docs con sus montos originales (lo que el usuario puso en "A PAGAR")
+      // La diferencia entre banco y docs se maneja con la cuenta de ajuste
+      var docsParaMov = [];
+      for (var d = 0; d < docsSeleccionados.length; d++) {
+        docsParaMov.push({
+          tipoDoc: docsSeleccionados[d].tipoDoc,
+          numDoc: docsSeleccionados[d].numDoc,
+          monto: parseFloat(docsSeleccionados[d].monto) || 0,
+          cuentaOrigen: docsSeleccionados[d].cuentaOrigen || ''
+        });
+      }
+      docsDistribuidos.push(docsParaMov);
+      
+    } else {
+      // Múltiples movimientos: distribuir docs con waterfall
+      var pool = [];
+      for (var d = 0; d < docsSeleccionados.length; d++) {
+        pool.push({
+          tipoDoc: docsSeleccionados[d].tipoDoc,
+          numDoc: docsSeleccionados[d].numDoc,
+          disponible: parseFloat(docsSeleccionados[d].monto) || 0,
+          cuentaOrigen: docsSeleccionados[d].cuentaOrigen || ''
+        });
+      }
+      
+      for (var i = 0; i < cbMovsParaContab.length; i++) {
+        var montoMov = cbMovsParaContab[i].monto;
+        var restante = montoMov;
+        var docsParaMov = [];
+        
+        for (var d = 0; d < pool.length; d++) {
+          if (restante <= 0) break;
+          if (pool[d].disponible <= 0) continue;
+          
+          var tomar = Math.min(restante, pool[d].disponible);
+          docsParaMov.push({
+            tipoDoc: pool[d].tipoDoc,
+            numDoc: pool[d].numDoc,
+            monto: tomar,
+            cuentaOrigen: pool[d].cuentaOrigen || ''
+          });
+          pool[d].disponible -= tomar;
+          restante -= tomar;
+        }
+        
+        docsDistribuidos.push(docsParaMov);
+      }
+    }
+  }
+  
+  for (var i = 0; i < cbMovsParaContab.length; i++) {
+    var m = cbMovsParaContab[i];
+    var docsAsignados = usaRebaja ? (docsDistribuidos[i] || []) : [];
+    
+    movimientos.push({
+      rowIndex: m.rowIndex,
+      fecha: m.fechaRaw,
+      monto: m.monto,
+      esAbono: m.esAbono,
+      descripcion: m.descripcion,
+      tipoContab: tipo,
+      cuentaContra: cuentaContra,
+      auxiliar: auxiliar,
+      glosa: glosa || m.descripcion,
+      docs: docsAsignados,
+      refMode: cbRefTipo, // REGISTRO o REBAJA
+      regTipoDoc: regTipoDoc,
+      regNumDoc: regNumDoc,
+      categoriaFlujo: categoriaFlujo,
+      lineasAdicionales: (i === 0) ? extras : [] // solo en primer mov del batch
+    });
+  }
+  
+  // Deshabilitar botón
+  var btn = document.getElementById('btnEjecutar');
+  btn.disabled = true;
+  btn.textContent = '⏳ Procesando...';
+  
+  // Si hay muchos movimientos, usar chunks con progreso
+  if (movimientos.length > 5) {
+    cbProcesarEnChunks(movimientos, 'contabilizarLoteUI', 'Contabilizando movimientos', function(resTotal) {
+      btn.disabled = false;
+      btn.textContent = '✓ Contabilizar';
+      cbCerrarModal('modalContab');
+      
+      if (resTotal.resultados && resTotal.resultados.length > 0) {
+        cbMostrarResultado(resTotal);
+      } else if (resTotal.exitosos > 0) {
+        cbToast('Contabilización exitosa: ' + resTotal.exitosos + ' movimientos');
+      } else {
+        cbToast(resTotal.error || 'Error en contabilización', 'error');
+      }
+      cbCargarMovimientos();
+    }, function(err) {
+      btn.disabled = false;
+      btn.textContent = '✓ Contabilizar';
+      cbError(err);
+    });
+    return;
+  }
+  
+  // Pocos movimientos: procesar directo (sin chunks)
+  google.script.run.withSuccessHandler(function(r) {
+    var res = r;
+    btn.disabled = false;
+    btn.textContent = '✓ Contabilizar';
+    
+    if (res.resultados && res.resultados.length > 0) {
+      cbCerrarModal('modalContab');
+      cbMostrarResultado(res);
+      cbCargarMovimientos();
+    } else if (res.success) {
+      cbCerrarModal('modalContab');
+      cbToast('Contabilización exitosa');
+      cbCargarMovimientos();
+    } else {
+      cbToast(res.error || 'Error en contabilización', 'error');
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false;
+    btn.textContent = '✓ Contabilizar';
+    cbError(e);
+  }).contabilizarLoteUI(movimientos);
+}
+
+function cbMostrarResultado(res) {
+  var html = '<div class="cb-resultado">';
+  html += '<div class="cb-resultado-header">';
+  html += '<span class="cb-resultado-icon">' + (res.exitosos > 0 ? '✅' : '❌') + '</span>';
+  html += '<span class="cb-resultado-titulo">' + res.exitosos + ' de ' + res.total + ' contabilizados</span>';
+  html += '</div>';
+  
+  if (res.error && res.exitosos === 0) {
+    html += '<div style="margin:12px 0;padding:12px;background:#fef2f2;border-radius:8px;color:#dc2626;font-weight:500">❌ ' + res.error + '</div>';
+  }
+  
+  if (res.resultados) {
+    html += '<table class="cb-resultado-table"><thead><tr><th>Fila</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>';
+    for (var i = 0; i < res.resultados.length; i++) {
+      var r = res.resultados[i];
+      html += '<tr class="' + (r.success ? 'cb-res-ok' : 'cb-res-err') + '">';
+      html += '<td>' + r.rowIndex + '</td>';
+      if (r.success) {
+        html += '<td style="color:#059669">✓ OK</td>';
+        html += '<td>' + (r.idComprobante || '—') + '</td>';
+      } else {
+        html += '<td style="color:#dc2626;font-weight:500">✕ Error</td>';
+        html += '<td style="color:#dc2626;font-size:12px">' + (r.error || 'Error desconocido') + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+  
+  if (res.fallidos > 0) {
+    html += '<div class="cb-resultado-warn">⚠️ ' + res.fallidos + ' movimiento(s) con error — revise los detalles arriba</div>';
+  }
+  
+  html += '</div>';
+  document.getElementById('resultadoBody').innerHTML = html;
+  cbAbrirModal('modalResultado');
+}
+
+// =============================================================================
+// ANULAR
+// =============================================================================
+function cbAnular(rowIndex) {
+  if (!confirm('¿Anular la contabilización de este movimiento?\nSe anulará el comprobante asociado.')) return;
+  
+  google.script.run.withSuccessHandler(function(r) {
+    var res = r;
+    if (res.success) {
+      cbToast(res.mensaje || 'Contabilización anulada');
+      cbCargarMovimientos();
+    } else {
+      cbToast(res.error || 'Error al anular', 'error');
+    }
+  }).withFailureHandler(cbError).anularContabCartUI(rowIndex);
+}
+
+// =============================================================================
+// MATCH AUTOMÁTICO
+// =============================================================================
+var cbMatchesData = []; // matches encontrados
+var cbMatchesSel = [];  // indices seleccionados
+
+function cbBuscarMatches() {
+  var año = parseInt(document.getElementById('selAño').value);
+  var mes = parseInt(document.getElementById('selMes').value) || 0;
+  
+  var periodo = mes > 0 ? (mes + '/' + año) : ('año ' + año + ' completo');
+  
+  // Abrir modal con loading
+  document.getElementById('matchBody').innerHTML = '<div class="cb-loading">🔍 Buscando matches (' + periodo + ')... esto puede tomar unos segundos</div>';
+  document.getElementById('btnContabMatches').disabled = true;
+  document.getElementById('matchResumen').textContent = '';
+  cbAbrirModal('modalMatch');
+  
+  google.script.run.withSuccessHandler(function(r) {
+    if (!r.success) {
+      document.getElementById('matchBody').innerHTML = '<div class="cb-empty">' + (r.error || 'Error buscando matches') + '</div>';
+      return;
+    }
+    
+    cbMatchesData = r.matches || [];
+    cbMatchesSel = [];
+    for (var i = 0; i < cbMatchesData.length; i++) cbMatchesSel.push(true);
+    
+    cbRenderMatches();
+  }).withFailureHandler(function(e) {
+    document.getElementById('matchBody').innerHTML = '<div class="cb-empty">Error: ' + e.message + '</div>';
+  }).buscarMatchesAutomaticosUI(año, mes);
+}
+
+function cbRenderMatches() {
+  var body = document.getElementById('matchBody');
+  
+  if (cbMatchesData.length === 0) {
+    body.innerHTML = '<div class="cb-empty">No se encontraron matches automáticos para este mes.<br><small>Se buscan por RUT detectado y por reglas de conciliación.</small></div>';
+    document.getElementById('btnContabMatches').disabled = true;
+    document.getElementById('matchResumen').textContent = '';
+    return;
+  }
+  
+  var selCount = 0, selMonto = 0;
+  for (var i = 0; i < cbMatchesSel.length; i++) {
+    if (cbMatchesSel[i]) { selCount++; selMonto += cbMatchesData[i].monto; }
+  }
+  
+  var exactos = cbMatchesData.filter(function(m) { return m.matchTipo === 'EXACTO' || m.matchTipo === 'REGLA_EXACTO'; }).length;
+  var reglas = cbMatchesData.filter(function(m) { return m.matchTipo && m.matchTipo.indexOf('REGLA') === 0; }).length;
+  var combinados = cbMatchesData.length - exactos;
+  
+  var html = '<div class="cb-match-summary">';
+  html += '<div class="cb-match-stat"><span class="cb-match-stat-val" style="color:#059669">' + cbMatchesData.length + '</span><span class="cb-match-stat-lbl">Matches</span></div>';
+  html += '<div class="cb-match-stat"><span class="cb-match-stat-val" style="color:#2563eb">' + exactos + '</span><span class="cb-match-stat-lbl">Exactos</span></div>';
+  if (combinados > 0) html += '<div class="cb-match-stat"><span class="cb-match-stat-val" style="color:#7c3aed">' + combinados + '</span><span class="cb-match-stat-lbl">Combinados</span></div>';
+  if (reglas > 0) html += '<div class="cb-match-stat"><span class="cb-match-stat-val" style="color:#d97706">' + reglas + '</span><span class="cb-match-stat-lbl">Por Regla</span></div>';
+  html += '<div class="cb-match-stat"><span class="cb-match-stat-val">' + cbFmtMoney(selMonto) + '</span><span class="cb-match-stat-lbl">Total Seleccionado</span></div>';
+  html += '</div>';
+  
+  html += '<table class="cb-match-table">';
+  html += '<thead><tr>';
+  html += '<th style="width:30px"><input type="checkbox" ' + (selCount === cbMatchesData.length ? 'checked' : '') + ' onchange="cbToggleAllMatches(this.checked)"></th>';
+  html += '<th>Tipo</th><th>Descripción / Auxiliar</th><th>Docs</th><th style="text-align:right">Monto</th><th>Match</th><th>Flujo</th>';
+  html += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < cbMatchesData.length; i++) {
+    var m = cbMatchesData[i];
+    var sel = cbMatchesSel[i];
+    var rowClass = sel ? '' : 'cb-match-desel';
+    var tipoLabel = m.esAbono ? '<span class="cb-tipo-badge cb-tipo-abono">ABONO</span>' : '<span class="cb-tipo-badge cb-tipo-cargo">CARGO</span>';
+    var matchBadge = '';
+    if (m.matchTipo === 'EXACTO') matchBadge = '<span class="cb-match-exacto">Exacto</span>';
+    else if (m.matchTipo === 'COMBINADO') matchBadge = '<span class="cb-match-combinado">Combinado (' + m.docs.length + ')</span>';
+    else if (m.matchTipo === 'REGLA_EXACTO') matchBadge = '<span class="cb-match-regla">Regla ✓</span>';
+    else if (m.matchTipo === 'REGLA_COMBINADO') matchBadge = '<span class="cb-match-regla">Regla (' + m.docs.length + ')</span>';
+    else if (m.matchTipo === 'REGLA_DIRECTO') matchBadge = '<span class="cb-match-regla">Directo</span>';
+    else matchBadge = '<span class="cb-match-combinado">' + m.matchTipo + '</span>';
+    var docsStr = m.docs && m.docs.length > 0 ? m.docs.map(function(d) { return d.tipoDoc + ' ' + d.numDoc; }).join(', ') : (m.cuentaContra || '—');
+    
+    // Selector de flujo por fila
+    var flujoHtml = '<select class="cb-match-flujo" data-idx="' + i + '" onchange="cbCambiarFlujoMatch(' + i + ', this.value)" style="font-size:11px;padding:2px 4px;max-width:140px">';
+    flujoHtml += '<option value="">—</option>';
+    for (var f = 0; f < cbCategoriasFlujo.length; f++) {
+      var cat = cbCategoriasFlujo[f];
+      var selAttr = (m.categoriaFlujo == cat.codigo) ? ' selected' : '';
+      flujoHtml += '<option value="' + cat.codigo + '"' + selAttr + '>' + cat.codigo + '-' + cat.nombre + '</option>';
+    }
+    flujoHtml += '</select>';
+    
+    html += '<tr class="' + rowClass + '">';
+    html += '<td style="text-align:center"><input type="checkbox" ' + (sel ? 'checked' : '') + ' onchange="cbToggleMatch(' + i + ', this.checked)"></td>';
+    html += '<td>' + tipoLabel + '</td>';
+    html += '<td><div style="font-weight:500">' + cbTruncate(m.descripcion, 40) + '</div>';
+    html += '<div class="cb-match-docs">' + m.auxiliar + ' — ' + cbTruncate(m.auxiliarNombre, 30) + '</div></td>';
+    html += '<td><div style="font-weight:500">' + docsStr + '</div>';
+    html += '<div class="cb-match-docs">' + (m.esAbono ? 'Cobranza' : 'Pago') + '</div></td>';
+    html += '<td style="text-align:right;font-weight:600">' + cbFmtMoney(m.monto) + '</td>';
+    html += '<td>' + matchBadge + '</td>';
+    html += '<td>' + flujoHtml + '</td>';
+    html += '</tr>';
+  }
+  
+  html += '</tbody></table>';
+  body.innerHTML = html;
+  
+  document.getElementById('btnContabMatches').disabled = selCount === 0;
+  document.getElementById('matchResumen').textContent = selCount + ' de ' + cbMatchesData.length + ' seleccionados — ' + cbFmtMoney(selMonto);
+}
+
+function cbToggleMatch(idx, checked) {
+  cbMatchesSel[idx] = checked;
+  cbRenderMatches();
+}
+
+function cbToggleAllMatches(checked) {
+  for (var i = 0; i < cbMatchesSel.length; i++) cbMatchesSel[i] = checked;
+  cbRenderMatches();
+}
+
+function cbCambiarFlujoMatch(idx, valor) {
+  cbMatchesData[idx].categoriaFlujo = valor ? parseInt(valor) : '';
+}
+
+function cbContabilizarMatches() {
+  var selMatches = [];
+  for (var i = 0; i < cbMatchesData.length; i++) {
+    if (!cbMatchesSel[i]) continue;
+    var m = cbMatchesData[i];
+    selMatches.push({
+      rowIndex: m.rowIndex, esAbono: m.esAbono, monto: m.monto,
+      fecha: m.fecha, descripcion: m.descripcion,
+      auxiliar: m.auxiliar, cuentaContra: m.cuentaContra || m.cuentaAux,
+      cuentaPago: m.cuentaPago || '',
+      cuentaCobro: m.cuentaCobro || '',
+      tipoContab: m.tipoContab, docs: m.docs || [], glosa: m.glosa,
+      categoriaFlujo: m.categoriaFlujo || ''
+    });
+  }
+  
+  if (selMatches.length === 0) {
+    cbToast('No hay matches seleccionados', 'error');
+    return;
+  }
+  
+  document.getElementById('btnContabMatches').disabled = true;
+  
+  // Usar procesamiento en chunks con progreso
+  cbProcesarEnChunks(selMatches, 'contabilizarMatchesUI', 'Contabilizando matches', function(resTotal) {
+    cbCerrarModal('modalMatch');
+    
+    if (resTotal.exitosos > 0) {
+      cbToast(resTotal.exitosos + ' movimientos contabilizados' + (resTotal.fallidos > 0 ? ', ' + resTotal.fallidos + ' fallidos' : ''));
+    } else {
+      cbToast(resTotal.error || 'Error en contabilización', 'error');
+    }
+    
+    // Si hay errores, mostrar detalle
+    if (resTotal.fallidos > 0 && resTotal.resultados) {
+      cbMostrarResultado(resTotal);
+    }
+    
+    document.getElementById('btnContabMatches').textContent = '✓ Contabilizar Seleccionados';
+    document.getElementById('btnContabMatches').disabled = false;
+    cbCargarMovimientos();
+  }, function(err) {
+    cbToast('Error: ' + err.message, 'error');
+    document.getElementById('btnContabMatches').textContent = '✓ Contabilizar Seleccionados';
+    document.getElementById('btnContabMatches').disabled = false;
+  });
+}
+
+// =============================================================================
+// PROCESAMIENTO EN CHUNKS CON BARRA DE PROGRESO
+// =============================================================================
+
+/**
+ * Procesa un array de movimientos en chunks, mostrando progreso.
+ * @param {Array} items - Movimientos a procesar
+ * @param {string} fnName - Nombre de la función GAS a llamar
+ * @param {string} titulo - Título para el modal de progreso
+ * @param {Function} onComplete - Callback con resultado consolidado
+ * @param {Function} onError - Callback de error
+ */
+function cbProcesarEnChunks(items, fnName, titulo, onComplete, onError) {
+  var CHUNK_SIZE = 50; // Batch writes — 50 comprobantes por llamada
+  var chunks = [];
+  for (var i = 0; i < items.length; i += CHUNK_SIZE) {
+    chunks.push(items.slice(i, i + CHUNK_SIZE));
+  }
+  
+  var totalItems = items.length;
+  var procesados = 0;
+  var exitososTotal = 0;
+  var fallidosTotal = 0;
+  var resultadosTotal = [];
+  var chunkIdx = 0;
+  
+  // Mostrar modal de progreso
+  cbMostrarProgreso(titulo, 0, totalItems);
+  
+  function procesarSiguiente() {
+    if (chunkIdx >= chunks.length) {
+      // Terminó
+      cbCerrarProgreso();
+      onComplete({
+        success: exitososTotal > 0,
+        exitosos: exitososTotal,
+        fallidos: fallidosTotal,
+        total: totalItems,
+        resultados: resultadosTotal
+      });
+      return;
+    }
+    
+    var chunk = chunks[chunkIdx];
+    var desde = procesados + 1;
+    var hasta = Math.min(procesados + chunk.length, totalItems);
+    cbActualizarProgreso(procesados, totalItems, 'Procesando ' + desde + '-' + hasta + ' de ' + totalItems + '...');
+    
+    google.script.run
+      .withSuccessHandler(function(r) {
+        var res = r;
+        procesados += chunk.length;
+        exitososTotal += (res.exitosos || 0);
+        fallidosTotal += (res.fallidos || 0);
+        if (res.resultados) {
+          for (var ri = 0; ri < res.resultados.length; ri++) {
+            resultadosTotal.push(res.resultados[ri]);
+          }
+        }
+        
+        cbActualizarProgreso(procesados, totalItems, 
+          '✅ ' + exitososTotal + ' ok' + (fallidosTotal > 0 ? ' · ❌ ' + fallidosTotal + ' error' : ''));
+        
+        chunkIdx++;
+        // Pequeña pausa para que el browser actualice la UI
+        setTimeout(procesarSiguiente, 100);
+      })
+      .withFailureHandler(function(e) {
+        procesados += chunk.length;
+        fallidosTotal += chunk.length;
+        for (var fi = 0; fi < chunk.length; fi++) {
+          resultadosTotal.push({ rowIndex: chunk[fi].rowIndex, success: false, error: e.message });
+        }
+        
+        chunkIdx++;
+        setTimeout(procesarSiguiente, 100);
+      })[fnName](chunk);
+  }
+  
+  procesarSiguiente();
+}
+
+function cbMostrarProgreso(titulo, actual, total) {
+  document.getElementById('progresoTitulo').textContent = '⏳ ' + titulo;
+  document.getElementById('progresoTexto').textContent = 'Iniciando...';
+  document.getElementById('progresoPct').textContent = '0%';
+  document.getElementById('progresoBarra').style.width = '0%';
+  document.getElementById('progresoDetalle').textContent = total + ' movimientos a procesar';
+  document.getElementById('modalProgreso').style.display = '';
+}
+
+function cbActualizarProgreso(actual, total, texto) {
+  var pct = Math.round((actual / total) * 100);
+  document.getElementById('progresoPct').textContent = pct + '%';
+  document.getElementById('progresoBarra').style.width = pct + '%';
+  document.getElementById('progresoTexto').textContent = texto || ('Procesando ' + actual + ' de ' + total);
+  document.getElementById('progresoDetalle').textContent = actual + ' / ' + total + ' procesados';
+}
+
+function cbCerrarProgreso() {
+  document.getElementById('modalProgreso').style.display = 'none';
+}
+
+// =============================================================================
+// UTILIDADES
+// =============================================================================
+function cbFmtMoney(num) {
+  if (num === null || num === undefined) return '$0';
+  return '$' + Math.round(num).toLocaleString('es-CL');
+}
+
+function cbFmtDate(fecha) {
+  if (!fecha) return '';
+  var d = new Date(fecha);
+  if (isNaN(d.getTime())) return String(fecha);
+  return ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear();
+}
+
+function cbTruncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function cbAbrirModal(id) {
+  document.getElementById(id).classList.add('cb-modal-active');
+}
+
+function cbCerrarModal(id) {
+  document.getElementById(id).classList.remove('cb-modal-active');
+}
+
+function cbToast(msg, tipo) {
+  var t = document.getElementById('cbToast');
+  t.textContent = msg;
+  t.className = 'cb-toast cb-toast-show' + (tipo ? ' cb-toast-' + tipo : '');
+  setTimeout(function() { t.classList.remove('cb-toast-show'); }, 3500);
+}
+
+function cbError(e) {
+  console.error(e);
+  cbToast('Error: ' + (e.message || e), 'error');
+  cbShowLoading(false);
+}
+
+function cbShowLoading(show) {
+  // Simple loading state
+  if (show) {
+    document.getElementById('tbodyMovimientos').innerHTML = 
+      '<tr><td colspan="9" class="cb-empty">⏳ Cargando movimientos...</td></tr>';
+  }
+}
+
+// Cerrar autocomplete al hacer click afuera
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.cb-autocomplete-wrap')) {
+    document.getElementById('auxSuggestions').style.display = 'none';
+  }
+});
+
+// =============================================================================
+// REGLAS DE CONCILIACIÓN
+// =============================================================================
+var cbReglasData = [];
+
+function cbAbrirReglas() {
+  cbAbrirModal('modalReglas');
+  cbCargarReglas();
+}
+
+function cbCargarReglas() {
+  document.getElementById('reglasLista').innerHTML = '<div class="cb-empty" style="padding:12px">Cargando reglas...</div>';
+  google.script.run.withSuccessHandler(function(r) {
+    cbReglasData = r.reglas || [];
+    cbRenderReglas();
+  }).withFailureHandler(function(e) {
+    document.getElementById('reglasLista').innerHTML = '<div class="cb-empty">Error: ' + e.message + '</div>';
+  }).getReglasUI();
+}
+
+function cbRenderReglas() {
+  var list = document.getElementById('reglasLista');
+  if (cbReglasData.length === 0) {
+    list.innerHTML = '<div class="cb-empty" style="padding:12px;font-size:13px">No hay reglas configuradas. Crea una abajo.</div>';
+    return;
+  }
+  
+  var html = '<table class="cb-table" style="font-size:12px"><thead><tr>';
+  html += '<th>Patrón</th><th>Tipo</th><th>Auxiliar</th><th>Cuenta</th><th>Glosa</th><th style="width:80px"></th>';
+  html += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < cbReglasData.length; i++) {
+    var r = cbReglasData[i];
+    var tipoBadge = '';
+    if (r.tipoContab === 'COBRANZA') tipoBadge = '<span style="background:#d1fae5;color:#059669;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">COBRANZA</span>';
+    else if (r.tipoContab === 'PAGO') tipoBadge = '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">PAGO</span>';
+    else if (r.tipoContab === 'GASTO') tipoBadge = '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">GASTO</span>';
+    else if (r.tipoContab === 'INGRESO') tipoBadge = '<span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">INGRESO</span>';
+    
+    html += '<tr>';
+    html += '<td style="font-weight:600">' + r.patron + '</td>';
+    html += '<td>' + tipoBadge + '</td>';
+    html += '<td>' + (r.auxiliar ? '<code style="font-size:11px">' + r.auxiliar + '</code> ' + (r.auxiliarNombre || '') : '—') + '</td>';
+    html += '<td>' + (r.cuentaContra || '—') + '</td>';
+    html += '<td style="color:#64748b">' + (r.glosaTemplate || '—') + '</td>';
+    html += '<td style="text-align:right">';
+    html += '<button style="background:none;border:none;cursor:pointer;font-size:14px" title="Editar" onclick="cbEditarRegla(' + i + ')">✏️</button>';
+    html += '<button style="background:none;border:none;cursor:pointer;font-size:14px" title="Eliminar" onclick="cbEliminarRegla(\'' + r.id + '\')">🗑️</button>';
+    html += '</td></tr>';
+  }
+  html += '</tbody></table>';
+  list.innerHTML = html;
+}
+
+function cbReglaTipoCambio() {
+  var tipo = document.getElementById('reglaTipo').value;
+  var auxWrap = document.getElementById('reglaAuxWrap');
+  var ctaWrap = document.getElementById('reglaCuentaWrap');
+  
+  if (tipo === 'GASTO' || tipo === 'INGRESO') {
+    ctaWrap.style.display = '';
+    // Auxiliar opcional para gasto/ingreso
+  } else {
+    ctaWrap.style.display = 'none';
+  }
+}
+
+function cbGuardarRegla() {
+  var regla = {
+    id: document.getElementById('reglaEditId').value || '',
+    patron: document.getElementById('reglaPatron').value.trim(),
+    tipoContab: document.getElementById('reglaTipo').value,
+    auxiliar: document.getElementById('reglaAuxiliar').value.trim(),
+    cuentaContra: document.getElementById('reglaCuenta').value.trim(),
+    glosaTemplate: document.getElementById('reglaGlosa').value.trim()
+  };
+  
+  if (!regla.patron) { cbToast('Ingrese un patrón', 'error'); return; }
+  if (!regla.tipoContab) { cbToast('Seleccione tipo de contabilización', 'error'); return; }
+  
+  google.script.run.withSuccessHandler(function(r) {
+    if (r.success) {
+      cbToast(r.mensaje || 'Regla guardada', 'success');
+      cbLimpiarFormRegla();
+      cbCargarReglas();
+    } else {
+      cbToast(r.error || 'Error', 'error');
+    }
+  }).withFailureHandler(function(e) {
+    cbToast('Error: ' + e.message, 'error');
+  }).guardarReglaUI(regla);
+}
+
+function cbEditarRegla(idx) {
+  var r = cbReglasData[idx];
+  document.getElementById('reglaEditId').value = r.id;
+  document.getElementById('reglaPatron').value = r.patron;
+  document.getElementById('reglaTipo').value = r.tipoContab;
+  document.getElementById('reglaAuxiliar').value = r.auxiliar;
+  document.getElementById('reglaCuenta').value = r.cuentaContra;
+  document.getElementById('reglaGlosa').value = r.glosaTemplate || '';
+  document.getElementById('reglaFormTitulo').textContent = '✏️ Editando Regla';
+  document.getElementById('btnCancelRegla').style.display = '';
+  cbReglaTipoCambio();
+}
+
+function cbLimpiarFormRegla() {
+  document.getElementById('reglaEditId').value = '';
+  document.getElementById('reglaPatron').value = '';
+  document.getElementById('reglaTipo').value = '';
+  document.getElementById('reglaAuxiliar').value = '';
+  document.getElementById('reglaCuenta').value = '';
+  document.getElementById('reglaGlosa').value = '';
+  document.getElementById('reglaFormTitulo').textContent = '➕ Nueva Regla';
+  document.getElementById('btnCancelRegla').style.display = 'none';
+  document.getElementById('reglaCuentaWrap').style.display = 'none';
+}
+
+function cbEliminarRegla(id) {
+  if (!confirm('¿Eliminar esta regla?')) return;
+  google.script.run.withSuccessHandler(function(r) {
+    if (r.success) { cbToast('Regla eliminada', 'success'); cbCargarReglas(); }
+    else cbToast(r.error, 'error');
+  }).withFailureHandler(function(e) { cbToast('Error: ' + e.message, 'error'); }).eliminarReglaUI(id);
+}
+</script>

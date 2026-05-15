@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('sidebar_css'); ?>
+  <?!= include('centralizacion_css'); ?>
+</head>
+<body>
+  <?!= include('sidebar'); ?>
+  
+  <main class="main-content">
+    <!-- Header -->
+    <div class="page-header">
+      <h1>📋 Centralización de Documentos</h1>
+      <div class="header-controls">
+        <select id="centAño" onchange="centCambiarAño(this.value)">
+          <option>2025</option>
+        </select>
+      </div>
+    </div>
+    
+    <!-- KPIs -->
+    <div class="kpis">
+      <div class="kpi ventas">
+        <div class="kpi-label">Ventas Pendientes</div>
+        <div class="kpi-val" id="kpiV">—</div>
+      </div>
+      <div class="kpi compras">
+        <div class="kpi-label">Compras Pendientes</div>
+        <div class="kpi-val" id="kpiC">—</div>
+      </div>
+      <div class="kpi honorarios">
+        <div class="kpi-label">Honorarios Pendientes</div>
+        <div class="kpi-val" id="kpiH">—</div>
+      </div>
+      <div class="kpi boletas">
+        <div class="kpi-label">Boletas Venta Pend.</div>
+        <div class="kpi-val" id="kpiBV">—</div>
+      </div>
+      <div class="kpi transbank">
+        <div class="kpi-label">Transbank Pend.</div>
+        <div class="kpi-val" id="kpiTB">—</div>
+      </div>
+      <div class="kpi total">
+        <div class="kpi-label">Centralizaciones</div>
+        <div class="kpi-val" id="kpiT">—</div>
+      </div>
+    </div>
+    
+    <!-- Tabs principales -->
+    <div class="tabs">
+      <button class="tab-btn active" data-v="pendientes" onclick="centVista('pendientes')">📋 Pendientes</button>
+      <button class="tab-btn" data-v="historial" onclick="centVista('historial')">📜 Historial</button>
+    </div>
+    
+    <!-- Sección Pendientes -->
+    <section id="secPendientes">
+      <div class="sub-tabs" id="subTabs">
+        <button class="sub-btn active" data-t="ventas" onclick="centTipo('ventas')">Ventas <span class="sub-count">0</span></button>
+        <button class="sub-btn" data-t="compras" onclick="centTipo('compras')">Compras <span class="sub-count">0</span></button>
+        <button class="sub-btn" data-t="honorarios" onclick="centTipo('honorarios')">Honorarios <span class="sub-count">0</span></button>
+      </div>
+      <div id="contentPend"><div class="loading">⏳ Cargando...</div></div>
+    </section>
+    
+    <!-- Sección Historial -->
+    <section id="secHistorial" style="display:none">
+      <div id="contentHist"><div class="loading">⏳ Cargando...</div></div>
+    </section>
+  </main>
+  
+  <!-- Modal Centralización -->
+  <div id="centModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <h3 id="modalTitulo">Centralizar Documentos</h3>
+        <button class="modal-close" onclick="centCerrarModal()">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <div class="loading">⏳ Cargando...</div>
+      </div>
+      <div class="modal-ftr">
+        <div class="modal-ftr-left" id="modalFooterInfo">0 documento(s)</div>
+        <div class="modal-ftr-right">
+          <button class="btn btn-secondary" onclick="centCerrarModal()">Cancelar</button>
+          <button class="btn btn-primary admin-only" id="btnCentralizar" onclick="centEjecutar()" style="width:auto">Centralizar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Toast -->
+  <div id="centToast" class="toast-msg"></div>
+
+  <?!= include('centralizacion_js'); ?>
+</body>
+</html>

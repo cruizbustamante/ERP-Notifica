@@ -1,0 +1,739 @@
+<script>
+var _cl = { cliFull: [], pend: null, det: null, kpis: null };
+
+// Avatar colors based on name hash
+var _avatarColors = ['#4f46e5','#7c3aed','#2563eb','#0891b2','#059669','#d97706','#dc2626','#be185d','#6366f1','#0d9488'];
+
+function clAvatarColor(name) {
+  var hash = 0;
+  for (var i = 0; i < (name||'').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return _avatarColors[Math.abs(hash) % _avatarColors.length];
+}
+
+function clInitials(name) {
+  if (!name) return '?';
+  var parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+  return parts[0].substring(0,2).toUpperCase();
+}
+
+document.addEventListener('DOMContentLoaded', function() { clInit(); });
+
+function clInit() {
+  clLoad(true);
+  var n = 2;
+  function dn() { n--; if (!n) { clLoad(false); clRenderTopPanels(); } }
+  
+  google.script.run.withSuccessHandler(function(r) {
+    _cl.kpis = r.kpis;
+    var k = r.kpis;
+    _('kDocs').textContent = k.cantPendientes;
+    _('kSaldo').textContent = fm(k.totalPendiente);
+    _('kProm').textContent = fm(k.saldoPromedio);
+    _('kDias').textContent = k.diasPromedio + ' días';
+    if (k.cantMorosos > 0) {
+      _('kMorosos').textContent = k.cantMorosos + ' moroso' + (k.cantMorosos > 1 ? 's' : '') + ' (+30d)';
+      _('kMorosos').style.color = '#dc2626';
+    } else {
+      _('kMorosos').textContent = '0 morosos';
+      _('kMorosos').style.color = '#059669';
+    }
+    dn();
+  }).withFailureHandler(function(e) { er(e); dn(); }).getResumenClientesUI();
+  
+  google.script.run.withSuccessHandler(function(r) {
+    _cl.cliFull = r.clientes;
+    renderCli(r.clientes, 'tbCli', 'tfCli');
+    // Con deuda = saldo > 1
+    var conDeuda = r.clientes.filter(function(c) { return c.saldo > 1; });
+    renderCli(conDeuda, 'tbDeuda', 'tfDeuda');
+    // Badges
+    _('badgeAll').textContent = r.clientes.length;
+    _('badgeDeuda').textContent = conDeuda.length;
+    var morosos = r.clientes.filter(function(c) { return c.saldo > 1 && c.diasMax > 30; });
+    _('badgeMor').textContent = morosos.length;
+    dn();
+  }).withFailureHandler(function(e) { er(e); dn(); }).getClientesListaUI();
+}
+
+// ── TABS ──
+function clTab(t) {
+  ['clientes','deuda','pend'].forEach(function(x) {
+    var p = _('panel-' + x), b = _('tab-' + x);
+    if (p) { p.classList.toggle('active', x === t); }
+    if (b) b.classList.toggle('active', x === t);
+  });
+  if (t === 'pend' && !_cl.pend) loadPend();
+}
+
+// ── TOP PANELS (Distribution + Aging) ──
+function clRenderTopPanels() {
+  if (!_cl.cliFull.length || !_cl.kpis) return;
+  _('topPanels').style.display = '';
+  
+  var conDeuda = _cl.cliFull.filter(function(c) { return c.saldo > 1; });
+  var sinDeuda = _cl.cliFull.length - conDeuda.length;
+  var totalSaldo = _cl.kpis.totalPendiente;
+  
+  // Aging buckets from client data
+  var buckets = { '0-30': 0, '31-60': 0, '61-90': 0, '91+': 0 };
+  var bucketCnt = { '0-30': 0, '31-60': 0, '61-90': 0, '91+': 0 };
+  for (var i = 0; i < conDeuda.length; i++) {
+    var d = conDeuda[i].diasMax;
+    var s = conDeuda[i].saldo;
+    if (d <= 30) { buckets['0-30'] += s; bucketCnt['0-30']++; }
+    else if (d <= 60) { buckets['31-60'] += s; bucketCnt['31-60']++; }
+    else if (d <= 90) { buckets['61-90'] += s; bucketCnt['61-90']++; }
+    else { buckets['91+'] += s; bucketCnt['91+']++; }
+  }
+  
+  // Donut chart
+  var donutData = [
+    { label: '0-30 días', value: buckets['0-30'], color: '#22c55e' },
+    { label: '31-60 días', value: buckets['31-60'], color: '#eab308' },
+    { label: '61-90 días', value: buckets['61-90'], color: '#f97316' },
+    { label: '91+ días', value: buckets['91+'], color: '#ef4444' }
+  ].filter(function(d) { return d.value > 0; });
+  
+  if (donutData.length > 0) {
+    drawDonut('donutCanvas', donutData);
+  } else {
+    var ctx = document.getElementById('donutCanvas').getContext('2d');
+    ctx.beginPath(); ctx.arc(60, 60, 45, 0, Math.PI*2); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 20; ctx.stroke();
+  }
+  
+  // Legend
+  var legH = '';
+  for (var i = 0; i < donutData.length; i++) {
+    legH += '<div class="cl-legend-item">';
+    legH += '<div class="cl-legend-left"><span class="cl-legend-dot" style="background:' + donutData[i].color + '"></span>';
+    legH += '<span class="cl-legend-label">' + donutData[i].label + '</span></div>';
+    legH += '<span class="cl-legend-val">' + fm(donutData[i].value) + '</span>';
+    legH += '</div>';
+  }
+  if (!donutData.length) legH = '<div style="color:#94a3b8;font-size:13px;padding:12px 0">Sin deuda pendiente 🎉</div>';
+  _('donutLegend').innerHTML = legH;
+  
+  // Stats
+  var stH = '';
+  stH += '<div class="cl-stat-row"><span class="cl-stat-label">Clientes con deuda</span><span class="cl-stat-val">' + conDeuda.length + '</span></div>';
+  stH += '<div class="cl-stat-row"><span class="cl-stat-label">Clientes al día</span><span class="cl-stat-val" style="color:#059669">' + sinDeuda + '</span></div>';
+  _('distribStats').innerHTML = stH;
+  
+  // Aging bars
+  var maxBucket = Math.max(buckets['0-30'], buckets['31-60'], buckets['61-90'], buckets['91+'], 1);
+  var barColors = { '0-30': '#22c55e', '31-60': '#eab308', '61-90': '#f97316', '91+': '#ef4444' };
+  var bKeys = ['0-30', '31-60', '61-90', '91+'];
+  var barH = '';
+  for (var b = 0; b < bKeys.length; b++) {
+    var k = bKeys[b];
+    var pct = totalSaldo > 0 ? Math.max((buckets[k] / totalSaldo) * 100, buckets[k] > 0 ? 8 : 0) : 0;
+    barH += '<div class="cl-aging-row">';
+    barH += '<span class="cl-aging-label">' + k + ' días</span>';
+    barH += '<div class="cl-aging-bar-wrap"><div class="cl-aging-bar" style="width:' + pct + '%;background:' + barColors[k] + '">';
+    if (pct > 15) barH += '<span>' + fm(buckets[k]) + '</span>';
+    barH += '</div></div>';
+    barH += '<span class="cl-aging-info">' + bucketCnt[k] + ' doc' + (bucketCnt[k]!==1?'s':'') + ' · <b>' + fm(buckets[k]) + '</b></span>';
+    barH += '</div>';
+  }
+  _('agingBars').innerHTML = barH;
+}
+
+function drawDonut(canvasId, data) {
+  var canvas = document.getElementById(canvasId);
+  var ctx = canvas.getContext('2d');
+  var cx = 60, cy = 60, r = 45, lw = 22;
+  var total = 0;
+  for (var i = 0; i < data.length; i++) total += data[i].value;
+  if (total === 0) return;
+  
+  var startAngle = -Math.PI / 2;
+  for (var i = 0; i < data.length; i++) {
+    var sliceAngle = (data[i].value / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, startAngle, startAngle + sliceAngle);
+    ctx.strokeStyle = data[i].color;
+    ctx.lineWidth = lw;
+    ctx.lineCap = 'butt';
+    ctx.stroke();
+    startAngle += sliceAngle;
+  }
+  // Center text
+  ctx.fillStyle = '#1e1b4b';
+  ctx.font = 'bold 13px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(fm(total), cx, cy);
+}
+
+// ── SALDO POR CLIENTE TABLE ──
+function renderCli(list, tbodyId, tfootId) {
+  var h = '', td = 0, th = 0, ts = 0;
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    var sc = c.saldo > 1 ? 'warn' : c.saldo < -1 ? 'neg' : '';
+    var color = clAvatarColor(c.nombre);
+    var initials = clInitials(c.nombre);
+    var estadoBadge = c.saldo > 1 ? '<span class="bp">Pendiente</span>' : '<span class="bo">Al día</span>';
+    h += '<tr' + (c.saldo < 1 ? ' style="opacity:.6"' : '') + '><td class="c" style="color:#94a3b8;font-size:12px">' + (i+1) + '</td>';
+    h += '<td><code onclick="verDet(\'' + c.rut + '\')">' + c.rutFmt + '</code></td>';
+    h += '<td><div class="cl-name-cell"><div class="cl-avatar" style="background:' + color + '">' + initials + '</div><span class="cl-name-text">' + c.nombre + '</span></div></td>';
+    h += '<td class="r">' + fm(c.debe) + '</td>';
+    h += '<td class="r">' + fm(c.haber) + '</td>';
+    h += '<td class="r b ' + sc + '">' + fms(c.saldo) + '</td>';
+    h += '<td class="r">' + c.cantDocs + '</td>';
+    h += '<td class="r">' + (c.saldo > 1 ? c.diasMax + 'd' : '—') + '</td>';
+    h += '<td class="c"><button class="bv" onclick="verDet(\'' + c.rut + '\')">Ver</button></td></tr>';
+    td += c.debe; th += c.haber; ts += c.saldo;
+  }
+  if (!list.length) h = '<tr><td colspan="9" class="emp">Sin clientes</td></tr>';
+  _(tbodyId).innerHTML = h;
+  _(tfootId).innerHTML = '<tr class="tot"><td></td><td></td><td>TOTAL</td><td class="r">' + fm(td) +
+    '</td><td class="r">' + fm(th) + '</td><td class="r b">' + fms(ts) +
+    '</td><td class="r">' + list.length + '</td><td></td><td></td></tr>';
+}
+
+function clFiltrar(tab) {
+  var inputId = tab === 'deuda' ? 'buscarDeuda' : 'buscar';
+  var q = _(inputId).value.toLowerCase();
+  var base = _cl.cliFull;
+  if (tab === 'deuda') base = base.filter(function(c) { return c.saldo > 1; });
+  if (!q) { renderCli(base, tab === 'deuda' ? 'tbDeuda' : 'tbCli', tab === 'deuda' ? 'tfDeuda' : 'tfCli'); return; }
+  var filtered = base.filter(function(c) {
+    return c.nombre.toLowerCase().indexOf(q) !== -1 || c.rut.indexOf(q) !== -1 || c.rutFmt.indexOf(q) !== -1;
+  });
+  renderCli(filtered, tab === 'deuda' ? 'tbDeuda' : 'tbCli', tab === 'deuda' ? 'tfDeuda' : 'tfCli');
+}
+
+// ── MOROSOS / AGING ──
+function loadPend() {
+  clLoad(true);
+  google.script.run.withSuccessHandler(function(r) {
+    _cl.pend = r; renderPend(); clLoad(false);
+  }).withFailureHandler(er).getMorososUI();
+}
+
+function renderPend() {
+  var d = _cl.pend;
+  var tK = ['0-30','31-60','61-90','91-180','181-365','+365'];
+  var tC = ['#22c55e','#84cc16','#eab308','#f97316','#ef4444','#991b1b'];
+  
+  var h = '<div class="trow">';
+  for (var i = 0; i < tK.length; i++) {
+    var k = tK[i], m = d.tramos[k] || 0, c = d.tramoCant[k] || 0;
+    h += '<div class="trm" style="border-left:4px solid ' + tC[i] + '"><span class="tl">' + k + ' días</span>';
+    h += '<span class="tv">' + fm(m) + '</span><span class="ts">' + c + ' doc' + (c!==1?'s':'') + '</span></div>';
+  }
+  h += '</div>';
+  _('tramosW').innerHTML = h;
+  
+  h = ''; var tot = 0;
+  for (var i = 0; i < d.documentos.length; i++) {
+    var p = d.documentos[i];
+    var rc = p.dias > 365 ? 'rd' : p.dias > 90 ? 'rw' : '';
+    h += '<tr class="' + rc + '"><td><code onclick="verDet(\'' + p.rut + '\')">' + p.rutFmt + '</code></td>';
+    h += '<td>' + p.nombre + '</td>';
+    h += '<td class="c">' + p.tipoDoc + '</td><td>' + p.numDoc + '</td>';
+    h += '<td>' + p.fechaDoc + '</td>';
+    h += '<td class="r">' + fm(p.montoReg) + '</td>';
+    h += '<td class="r">' + fm(p.montoReb) + '</td>';
+    h += '<td class="r b warn">' + fm(p.saldo) + '</td>';
+    h += '<td class="r">' + p.dias + '</td>';
+    h += '<td class="c"><span class="badge" style="background:' + tC[tK.indexOf(p.tramo)] + '">' + p.tramo + '</span></td></tr>';
+    tot += p.saldo;
+  }
+  if (!d.documentos.length) h = '<tr><td colspan="10" class="emp">Sin morosos 🎉</td></tr>';
+  _('tbPend').innerHTML = h;
+  _('tfPend').innerHTML = '<tr class="tot"><td colspan="5">TOTAL</td><td></td><td></td><td class="r b">' + fm(tot) + '</td><td></td><td></td></tr>';
+}
+
+// ── DETALLE CLIENTE (Modal) ──
+function verDet(rut) {
+  _('modalDet').classList.add('open');
+  if (USER_ROLE && !USER_ROLE.esAdmin) aplicarModoConsulta();
+  _('mBody').innerHTML = '<div style="text-align:center;padding:40px;color:#94a3b8"><div class="sp" style="display:inline-block;margin-bottom:10px"></div><br>Cargando historial...</div>';
+  _('mNombre').textContent = '...';
+  _('mRut').textContent = rut;
+  _('mBadges').innerHTML = '';
+  
+  google.script.run.withSuccessHandler(function(r) {
+    _cl.det = r;
+    renderDetModal(r, 'pend');
+  }).withFailureHandler(function(e) {
+    _('mBody').innerHTML = '<div style="color:#ef4444;padding:20px">Error: ' + (e.message||e) + '</div>';
+  }).getDetalleClienteUI(rut);
+}
+
+function clCerrarDet() {
+  _('modalDet').classList.remove('open');
+}
+
+// Close modal on overlay click
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'modalDet') clCerrarDet();
+});
+
+function renderDetModal(d, filtro) {
+  var color = clAvatarColor(d.nombre);
+  _('mAvatar').textContent = clInitials(d.nombre);
+  _('mAvatar').style.background = color;
+  _('mNombre').textContent = d.nombre;
+  _('mRut').textContent = d.rutFmt;
+  _('mDebe').textContent = fm(d.totDebe);
+  _('mHaber').textContent = fm(d.totHaber);
+  _('mSaldo').textContent = fms(d.totSaldo);
+  _('mDocs').textContent = d.documentos.length;
+  
+  // Badges
+  var bh = '';
+  var hasPending = d.totSaldo > 1;
+  if (hasPending) {
+    bh += '<span class="cl-badge-status cl-badge-active">Con saldo</span>';
+    var maxDias = 0;
+    for (var i = 0; i < d.documentos.length; i++) {
+      if (!d.documentos[i].estaPagado && d.documentos[i].dias > maxDias) maxDias = d.documentos[i].dias;
+    }
+    if (maxDias > 30) {
+      bh += '<span class="cl-badge-status cl-badge-late">Moroso ' + maxDias + 'd</span>';
+    } else {
+      bh += '<span class="cl-badge-status cl-badge-aging">Al día</span>';
+    }
+  } else {
+    bh += '<span class="cl-badge-status cl-badge-active">Al día</span>';
+  }
+  _('mBadges').innerHTML = bh;
+  
+  // Mostrar/ocultar botón Enviar Deuda
+  var btnDeuda = document.getElementById('btnEnviarDeuda');
+  if (btnDeuda) btnDeuda.style.display = d.totSaldo > 1 ? '' : 'none';
+  
+  // Filter buttons
+  var btns = document.querySelectorAll('.cl-filter-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
+  
+  var docs = d.documentos;
+  if (filtro === 'pend') docs = docs.filter(function(x) { return !x.estaPagado; });
+  
+  renderDetDocs(docs);
+}
+
+function clFiltDet(filtro, btn) {
+  if (!_cl.det) return;
+  var btns = document.querySelectorAll('.cl-filter-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
+  if (btn) btn.classList.add('active');
+  
+  var docs = _cl.det.documentos;
+  if (filtro === 'pend') docs = docs.filter(function(x) { return !x.estaPagado; });
+  renderDetDocs(docs);
+}
+
+function renderDetDocs(docs) {
+  var typeClass = { 'FAC': 'cl-doc-type-fac', 'BV': 'cl-doc-type-bv', 'VT': 'cl-doc-type-vt', 'ND': 'cl-doc-type-nd', 'NC': 'cl-doc-type-nc' };
+  var typeName = { 'FAC': 'Factura', 'BV': 'Boleta V.', 'VT': 'Voucher TB', 'ND': 'Nota Déb.', 'NC': 'Nota Créd.' };
+  
+  var h = '<table style="width:100%;border-collapse:collapse">';
+  h += '<thead><tr style="border-bottom:1px solid #e8ecf1">';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:left">Tipo</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:left">Folio</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:left">Fecha</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:right">Monto</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:center">Estado</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:left">Fecha Pago</th>';
+  h += '<th style="padding:8px 10px;font-size:11px;font-weight:600;color:#94a3b8;text-transform:uppercase;text-align:right">Saldo</th>';
+  h += '<th style="padding:8px 6px;width:30px"></th>';
+  h += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < docs.length; i++) {
+    var dc = docs[i];
+    var tc = typeClass[dc.tipoDoc] || 'cl-doc-type-fac';
+    var tn = typeName[dc.tipoDoc] || dc.tipoDoc;
+    var isPend = !dc.estaPagado;
+    var opac = isPend ? '' : 'opacity:.55;';
+    
+    h += '<tr onclick="clTogMov(' + i + ')" style="cursor:pointer;border-bottom:1px solid #f5f6fa;transition:background .1s;' + opac + '" onmouseover="this.style.background=\'#f8faff\'" onmouseout="this.style.background=\'\'">';
+    h += '<td style="padding:10px"><span class="cl-doc-type ' + tc + '">' + tn + '</span></td>';
+    h += '<td style="padding:10px;font-weight:600;color:#1e1b4b">' + dc.numDoc + '</td>';
+    h += '<td style="padding:10px;font-size:12px;color:#64748b">' + dc.fechaDoc + '</td>';
+    h += '<td style="padding:10px;text-align:right;color:#334155">' + fm(dc.montoReg) + '</td>';
+    h += '<td style="padding:10px;text-align:center"><span class="cl-doc-status ' + (isPend ? 'cl-doc-pend' : 'cl-doc-ok') + '">' + dc.estado + '</span></td>';
+    h += '<td style="padding:10px;font-size:12px;color:#64748b">' + (dc.fechaUltPago || '—') + '</td>';
+    h += '<td style="padding:10px;text-align:right;font-weight:700;' + (isPend ? 'color:#dc2626' : 'color:#94a3b8') + '">' + fms(dc.saldo) + '</td>';
+    h += '<td style="padding:10px;text-align:center;color:#94a3b8;font-size:12px" id="tg' + i + '">▸</td>';
+    h += '</tr>';
+    
+    // Expandable movements
+    h += '<tr id="mv' + i + '" style="display:none"><td colspan="8" style="padding:0">';
+    h += '<div class="cl-movs-wrap open" style="margin:0 10px 8px;border-radius:8px">';
+    h += '<table class="cl-movs-table"><thead><tr>';
+    h += '<th>Fecha</th><th>Tipo</th><th>TtdCod</th><th>N° Doc</th>';
+    h += '<th style="text-align:right">Debe</th><th style="text-align:right">Haber</th><th style="text-align:right">Saldo</th><th>Glosa</th>';
+    h += '</tr></thead><tbody>';
+    
+    var sal = 0;
+    for (var m = 0; m < dc.movs.length; m++) {
+      var mv = dc.movs[m];
+      sal += mv.debe - mv.haber;
+      var tcl = mv.esReg ? 'mreg' : 'mreb';
+      var tl = mv.esReg ? 'Reg' : 'Reb';
+      h += '<tr><td>' + mv.fecha + '</td>';
+      h += '<td class="' + tcl + '">' + tl + '</td>';
+      h += '<td style="text-align:center">' + mv.ttdCod + '</td><td>' + mv.numDoc + '</td>';
+      h += '<td style="text-align:right">' + (mv.debe > 0 ? fm(mv.debe) : '') + '</td>';
+      h += '<td style="text-align:right">' + (mv.haber > 0 ? fm(mv.haber) : '') + '</td>';
+      h += '<td style="text-align:right;font-weight:700">' + fms(sal) + '</td>';
+      h += '<td class="gl">' + mv.glosa + '</td></tr>';
+    }
+    h += '</tbody></table></div></td></tr>';
+  }
+  
+  if (!docs.length) h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:40px">Sin documentos</td></tr>';
+  h += '</tbody></table>';
+  
+  _('mBody').innerHTML = h;
+}
+
+function clTogMov(i) {
+  var el = _('mv' + i), tg = _('tg' + i);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    if (tg) tg.textContent = '▾';
+  } else {
+    el.style.display = 'none';
+    if (tg) tg.textContent = '▸';
+  }
+}
+
+// ── UTILS ──
+function _(id) { return document.getElementById(id); }
+function fm(n) { return '$' + Math.round(Math.abs(n || 0)).toLocaleString('es-CL'); }
+function fms(n) { if (!n || Math.abs(n) < 1) return '$0'; var a = Math.round(Math.abs(n)).toLocaleString('es-CL'); return n < 0 ? '($' + a + ')' : '$' + a; }
+function clLoad(s) { _('loadW').style.display = s ? '' : 'none'; }
+function er(e) { clLoad(false); alert('Error: ' + (e.message || e)); }
+
+// ── EXPORTAR MOROSOS A EXCEL ──
+function clExportarMorosos() {
+  var btn = event.target.closest('button');
+  var originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Generando...';
+  
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false;
+    btn.innerHTML = originalHTML;
+    
+    if (r.error) { alert('Error: ' + r.error); return; }
+    
+    // Descargar xlsx via URL
+    window.open(r.url, '_blank');
+    // Eliminar archivo temporal de Drive
+    if (r.id) {
+      setTimeout(function() {
+        google.script.run.eliminarArchivoTempUI(r.id);
+      }, 5000);
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false;
+    btn.innerHTML = originalHTML;
+    alert('Error: ' + (e.message || e));
+  }).exportarMorososExcelUI();
+}
+// =============================================================================
+// EMAIL — Composición y envío
+// =============================================================================
+
+var _emData = {}; // datos del email actual
+
+function clEnviarDeudaDesdeDet() {
+  if (!_cl.det) return;
+  clCerrarDet();
+  clEnviarDeudaEmail(_cl.det.rut);
+}
+
+// ── EMAIL INDIVIDUAL (preview + editar + enviar) ──
+function clEnviarDeudaEmail(rut) {
+  document.getElementById('emIcon').textContent = '🔴';
+  document.getElementById('emTitle').textContent = 'Enviar Cobranza';
+  document.getElementById('emSubtitle').textContent = 'Cargando...';
+  document.getElementById('emPreview').innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8"><div class="sp" style="display:inline-block"></div></div>';
+  document.getElementById('emAdjunto').style.display = 'none';
+  
+  google.script.run.withSuccessHandler(function(cfg) {
+    document.getElementById('emCC').value = cfg.CC_DEFAULT || '';
+  }).getEmailConfigUI();
+  
+  google.script.run.withSuccessHandler(function(r) {
+    _emData = { tipo: 'cobranza', rut: rut, email: r.email, asunto: r.asunto, cuerpo: r.cuerpo, pdfIds: r.pdfIds || [] };
+    document.getElementById('emPara').value = r.email || '(sin email)';
+    document.getElementById('emAsunto').value = r.asunto;
+    var subText = r.docs + ' docs · $' + Math.round(r.totalDeuda).toLocaleString('es-CL') + ' · ' + r.maxDias + ' días · Nivel: ' + r.nivel;
+    document.getElementById('emSubtitle').textContent = subText;
+    document.getElementById('emPreview').innerHTML = r.cuerpo;
+    // Mostrar adjuntos
+    if (r.pdfIds && r.pdfIds.length > 0) {
+      document.getElementById('emAdjunto').style.display = 'block';
+      document.getElementById('emAdjuntoNombre').textContent = r.pdfIds.length + ' factura(s) adjunta(s)';
+    } else {
+      document.getElementById('emAdjunto').style.display = 'none';
+    }
+    document.getElementById('emStatus').textContent = '';
+    document.getElementById('modalEmail').classList.add('open');
+  }).previewEmailCobranzaUI(rut);
+}
+
+function clEnviarFacturaEmail(rut, folio, año, mes, pdfId, pdfNombre) {
+  document.getElementById('emIcon').textContent = '📧';
+  document.getElementById('emTitle').textContent = 'Enviar Factura';
+  document.getElementById('emSubtitle').textContent = 'Cargando...';
+  document.getElementById('emPreview').innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8"><div class="sp" style="display:inline-block"></div></div>';
+  
+  if (pdfId && pdfNombre) {
+    document.getElementById('emAdjunto').style.display = 'block';
+    document.getElementById('emAdjuntoNombre').textContent = pdfNombre;
+  } else {
+    document.getElementById('emAdjunto').style.display = 'none';
+  }
+  
+  google.script.run.withSuccessHandler(function(cfg) {
+    document.getElementById('emCC').value = cfg.CC_DEFAULT || '';
+  }).getEmailConfigUI();
+  
+  google.script.run.withSuccessHandler(function(r) {
+    _emData = { tipo: 'factura', rut: rut, folio: folio, año: año, mes: mes, pdfId: pdfId || '',
+                email: r.email, asunto: r.asunto, cuerpo: r.cuerpo };
+    document.getElementById('emPara').value = r.email || '(sin email)';
+    document.getElementById('emAsunto').value = r.asunto;
+    document.getElementById('emSubtitle').textContent = 'F-' + folio + ' · ' + r.facturacionTipo;
+    document.getElementById('emPreview').innerHTML = r.cuerpo;
+    document.getElementById('emStatus').textContent = '';
+    document.getElementById('modalEmail').classList.add('open');
+  }).previewEmailFacturaUI(rut, folio, año, mes);
+}
+
+function clEnviarEmail() {
+  var btn = document.getElementById('emBtnEnviar');
+  btn.disabled = true; btn.textContent = '⏳ Enviando...';
+  
+  var datos = {
+    email: document.getElementById('emPara').value,
+    cc: document.getElementById('emCC').value,
+    asunto: document.getElementById('emAsunto').value,
+    cuerpo: document.getElementById('emPreview').innerHTML,
+    pdfId: _emData.pdfId || '',
+    pdfIds: _emData.pdfIds || []
+  };
+  
+  if (!datos.email || datos.email === '(sin email)') {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correo';
+    document.getElementById('emStatus').innerHTML = '<span style="color:#dc2626">❌ Sin email de destino</span>';
+    return;
+  }
+  
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correo';
+    if (r.success) {
+      document.getElementById('emStatus').innerHTML = '<span style="color:#059669">✅ ' + r.mensaje + '</span>';
+      setTimeout(function() { clCerrarEmail(); }, 2000);
+    } else {
+      document.getElementById('emStatus').innerHTML = '<span style="color:#dc2626">❌ ' + r.error + '</span>';
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correo';
+    document.getElementById('emStatus').innerHTML = '<span style="color:#dc2626">❌ ' + e.message + '</span>';
+  }).enviarEmailDirectoUI(datos);
+}
+
+function clCerrarEmail() { document.getElementById('modalEmail').classList.remove('open'); }
+
+// ── FACTURACIÓN MASIVA DEL MES ──
+var _fmFacturas = [];
+
+function clAbrirFacturacionMes() {
+  var now = new Date();
+  var selAño = document.getElementById('fmAño');
+  var selMes = document.getElementById('fmMes');
+  if (selAño.options.length === 0) {
+    for (var y = now.getFullYear(); y >= now.getFullYear()-1; y--) {
+      var o = document.createElement('option'); o.value = y; o.textContent = y; selAño.appendChild(o);
+    }
+    var meses = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    for (var m = 1; m <= 12; m++) {
+      var o = document.createElement('option'); o.value = m; o.textContent = m + ' - ' + meses[m]; selMes.appendChild(o);
+    }
+    selMes.value = now.getMonth() + 1;
+  }
+  google.script.run.withSuccessHandler(function(cfg) {
+    document.getElementById('fmCC').value = cfg.CC_DEFAULT || '';
+  }).getEmailConfigUI();
+  
+  document.getElementById('modalFactMes').classList.add('open');
+  clCargarFactMes();
+}
+
+function clCargarFactMes() {
+  var año = parseInt(document.getElementById('fmAño').value);
+  var mes = parseInt(document.getElementById('fmMes').value);
+  document.getElementById('fmBody').innerHTML = '<div style="text-align:center;color:#94a3b8;padding:40px"><div class="sp" style="display:inline-block;margin-bottom:10px"></div><br>Buscando facturas y PDFs...</div>';
+  document.getElementById('fmBtnEnviar').disabled = true;
+  
+  google.script.run.withSuccessHandler(function(r) {
+    if (r.error) { document.getElementById('fmBody').innerHTML = '<div style="color:#dc2626;padding:20px">' + r.error + '</div>'; return; }
+    _fmFacturas = r.facturas || [];
+    clRenderFactMes(r);
+  }).withFailureHandler(function(e) {
+    document.getElementById('fmBody').innerHTML = '<div style="color:#dc2626;padding:20px">Error: ' + e.message + '</div>';
+  }).getFacturasMesUI(año, mes);
+}
+
+function clRenderFactMes(r) {
+  if (!r.facturas || r.facturas.length === 0) {
+    document.getElementById('fmBody').innerHTML = '<div style="text-align:center;color:#94a3b8;padding:40px">Sin facturas para ' + r.nombreMes + ' ' + r.año + '</div>';
+    return;
+  }
+  var h = '<div style="margin-bottom:10px;font-size:12px;color:#64748b">' + r.facturas.length + ' facturas encontradas — ' + r.nombreMes + ' ' + r.año + '</div>';
+  h += '<div style="margin-bottom:8px"><label style="font-size:12px;cursor:pointer"><input type="checkbox" id="fmCheckAll" onchange="clToggleFmAll(this.checked)" checked> Seleccionar todas</label></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  h += '<thead><tr style="background:#fafbfd;border-bottom:1px solid #e8ecf1">';
+  h += '<th style="padding:6px 8px;width:30px"></th><th style="padding:6px 8px;text-align:left">Folio</th><th style="padding:6px 8px;text-align:left">Cliente</th>';
+  h += '<th style="padding:6px 8px;text-align:left">Email</th><th style="padding:6px 8px;text-align:center">Tipo</th>';
+  h += '<th style="padding:6px 8px;text-align:right">Total</th><th style="padding:6px 8px;text-align:center">PDF</th>';
+  h += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < r.facturas.length; i++) {
+    var f = r.facturas[i];
+    var factBadge = f.facturacionTipo === 'Mes Anticipado' ? '<span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">Antic.</span>' : '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">Venc.</span>';
+    var pdfIcon = f.pdfEncontrado ? '<span style="color:#059669" title="' + f.pdfNombre + '">✅</span>' : '<span style="color:#dc2626" title="No encontrado">❌</span>';
+    var emailOk = f.email ? '' : ' style="color:#dc2626"';
+    
+    h += '<tr style="border-bottom:1px solid #f5f6fa">';
+    h += '<td style="padding:5px 8px"><input type="checkbox" class="fm-check" data-idx="' + i + '" checked></td>';
+    h += '<td style="padding:5px 8px;font-weight:600">F-' + f.folio + '</td>';
+    h += '<td style="padding:5px 8px">' + f.razonSocial + '</td>';
+    h += '<td style="padding:5px 8px"' + emailOk + '>' + (f.email || 'SIN EMAIL') + '</td>';
+    h += '<td style="padding:5px 8px;text-align:center">' + factBadge + '</td>';
+    h += '<td style="padding:5px 8px;text-align:right;font-weight:600">$' + Math.round(f.total).toLocaleString('es-CL') + '</td>';
+    h += '<td style="padding:5px 8px;text-align:center">' + pdfIcon + '</td>';
+    h += '</tr>';
+  }
+  h += '</tbody></table>';
+  document.getElementById('fmBody').innerHTML = h;
+  document.getElementById('fmBtnEnviar').disabled = false;
+  document.getElementById('fmStatus').textContent = r.facturas.length + ' facturas listas';
+}
+
+function clToggleFmAll(checked) {
+  document.querySelectorAll('.fm-check').forEach(function(cb) { cb.checked = checked; });
+}
+
+function clEnviarFactMasivo() {
+  var seleccionadas = [];
+  var año = parseInt(document.getElementById('fmAño').value);
+  var mes = parseInt(document.getElementById('fmMes').value);
+  document.querySelectorAll('.fm-check:checked').forEach(function(cb) {
+    var idx = parseInt(cb.getAttribute('data-idx'));
+    var f = _fmFacturas[idx];
+    if (f && f.email) seleccionadas.push({ rut: f.rut, folio: f.folio, email: f.email, pdfId: f.pdfId, razonSocial: f.razonSocial, año: año, mes: mes });
+  });
+  
+  if (seleccionadas.length === 0) { alert('No hay facturas seleccionadas con email'); return; }
+  if (!confirm('¿Enviar ' + seleccionadas.length + ' correos de facturación?\n\nCada email tendrá la factura PDF adjunta y contenido personalizado.')) return;
+  
+  var btn = document.getElementById('fmBtnEnviar');
+  btn.disabled = true; btn.textContent = '⏳ Enviando ' + seleccionadas.length + ' correos...';
+  var cc = document.getElementById('fmCC').value;
+  
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correos';
+    if (r.success) {
+      var msg = '✅ ' + r.exitosos + ' correos enviados';
+      if (r.fallidos > 0) msg += ' · ❌ ' + r.fallidos + ' fallidos';
+      document.getElementById('fmStatus').innerHTML = '<span style="color:#059669">' + msg + '</span>';
+    } else {
+      document.getElementById('fmStatus').innerHTML = '<span style="color:#dc2626">Error: ' + (r.error || 'Error desconocido') + '</span>';
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correos';
+    document.getElementById('fmStatus').innerHTML = '<span style="color:#dc2626">Error: ' + e.message + '</span>';
+  }).enviarFacturasMasivoUI(seleccionadas, cc);
+}
+
+// ── COBRANZA MASIVA ──
+function clAbrirCobranzaMasiva() {
+  google.script.run.withSuccessHandler(function(cfg) {
+    document.getElementById('cmCC').value = cfg.CC_DEFAULT || '';
+  }).getEmailConfigUI();
+  
+  document.getElementById('modalCobrMasiva').classList.add('open');
+  
+  // Usar datos ya cargados de morosos
+  var conDeuda = _cl.cliFull.filter(function(c) { return c.saldo > 1; });
+  if (conDeuda.length === 0) {
+    document.getElementById('cmBody').innerHTML = '<div style="text-align:center;color:#94a3b8;padding:40px">Sin clientes con deuda 🎉</div>';
+    return;
+  }
+  
+  var h = '<div style="margin-bottom:8px"><label style="font-size:12px;cursor:pointer"><input type="checkbox" id="cmCheckAll" onchange="clToggleCmAll(this.checked)" checked> Seleccionar todos</label></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  h += '<thead><tr style="background:#fafbfd;border-bottom:1px solid #e8ecf1">';
+  h += '<th style="padding:6px 8px;width:30px"></th><th style="padding:6px 8px;text-align:left">Cliente</th>';
+  h += '<th style="padding:6px 8px;text-align:left">Email</th>';
+  h += '<th style="padding:6px 8px;text-align:right">Deuda</th><th style="padding:6px 8px;text-align:center">Días</th>';
+  h += '<th style="padding:6px 8px;text-align:center">Nivel</th>';
+  h += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < conDeuda.length; i++) {
+    var c = conDeuda[i];
+    var nivel, nivelBadge;
+    if (c.diasMax > 60) { nivel = 'CRITICO'; nivelBadge = '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">Crítico</span>'; }
+    else if (c.diasMax > 30) { nivel = 'URGENTE'; nivelBadge = '<span style="background:#fef3c7;color:#d97706;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">Urgente</span>'; }
+    else { nivel = 'RECORDATORIO'; nivelBadge = '<span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">Recordatorio</span>'; }
+    
+    var emailStyle = c.email ? 'color:#475569' : 'color:#dc2626;font-weight:600';
+    var emailText = c.email || 'SIN EMAIL';
+    
+    h += '<tr style="border-bottom:1px solid #f5f6fa">';
+    h += '<td style="padding:5px 8px"><input type="checkbox" class="cm-check" data-rut="' + c.rut + '" data-nombre="' + c.nombre + '" checked></td>';
+    h += '<td style="padding:5px 8px"><div style="font-weight:500">' + c.nombre + '</div><div style="font-size:11px;color:#94a3b8">' + c.rutFmt + '</div></td>';
+    h += '<td style="padding:5px 8px;font-size:11px;' + emailStyle + '">' + emailText + '</td>';
+    h += '<td style="padding:5px 8px;text-align:right;font-weight:700;color:#dc2626">$' + Math.round(c.saldo).toLocaleString('es-CL') + '</td>';
+    h += '<td style="padding:5px 8px;text-align:center;font-weight:600">' + c.diasMax + 'd</td>';
+    h += '<td style="padding:5px 8px;text-align:center">' + nivelBadge + '</td>';
+    h += '</tr>';
+  }
+  h += '</tbody></table>';
+  document.getElementById('cmBody').innerHTML = h;
+  document.getElementById('cmStatus').textContent = conDeuda.length + ' clientes con deuda';
+}
+
+function clToggleCmAll(checked) {
+  document.querySelectorAll('.cm-check').forEach(function(cb) { cb.checked = checked; });
+}
+
+function clEnviarCobrMasivo() {
+  var seleccionados = [];
+  document.querySelectorAll('.cm-check:checked').forEach(function(cb) {
+    seleccionados.push({ rut: cb.getAttribute('data-rut'), nombre: cb.getAttribute('data-nombre') });
+  });
+  
+  if (seleccionados.length === 0) { alert('No hay clientes seleccionados'); return; }
+  if (!confirm('¿Enviar ' + seleccionados.length + ' correos de cobranza?\n\nCada email se genera según el nivel de mora del cliente.')) return;
+  
+  var btn = document.getElementById('cmBtnEnviar');
+  btn.disabled = true; btn.textContent = '⏳ Enviando ' + seleccionados.length + ' correos...';
+  var cc = document.getElementById('cmCC').value;
+  
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correos';
+    if (r.success) {
+      var msg = '✅ ' + r.exitosos + ' correos enviados';
+      if (r.fallidos > 0) msg += ' · ❌ ' + r.fallidos + ' fallidos';
+      document.getElementById('cmStatus').innerHTML = '<span style="color:#059669">' + msg + '</span>';
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false; btn.textContent = '📧 Enviar Correos';
+    document.getElementById('cmStatus').innerHTML = '<span style="color:#dc2626">Error: ' + e.message + '</span>';
+  }).enviarCobranzaMasivoUI(seleccionados, cc);
+}
+
+</script>

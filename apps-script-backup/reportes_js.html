@@ -1,0 +1,1310 @@
+<script>
+// =============================================================================
+// MÓDULO DE REPORTES v3 - Notifica Legal ERP
+// =============================================================================
+// Flujo: Abrir modal → Configurar filtros → Generar → Ver tabla → Exportar Excel
+// =============================================================================
+
+var reporteActual = null;
+var datosReporteActual = null;
+// cuentasMovimiento ya declarada en contabilidad_js_v3
+
+// Cargar cuentas de movimiento para filtros
+(function() {
+  google.script.run.withSuccessHandler(function(r) {
+    var grupos = ['A','P','T','I','G'];
+    cuentasMovimiento = [];
+    for (var g = 0; g < grupos.length; g++) {
+      var grp = r[grupos[g]];
+      if (!grp || !grp.cuentas) continue;
+      for (var c = 0; c < grp.cuentas.length; c++) {
+        cuentasMovimiento.push(grp.cuentas[c]);
+      }
+    }
+  }).getCuentasParaSelectorUI();
+})();
+
+var REPORTES_CONFIG = {
+  libro_diario:     { titulo: 'Libro Diario',                    icono: '📖' },
+  libro_mayor:      { titulo: 'Libro Mayor',                     icono: '📚' },
+  balance_8:        { titulo: 'Balance de Comprobación',          icono: '📊' },
+  estado_resultados:{ titulo: 'Estado de Resultados',             icono: '📈' },
+  flujo_efectivo:   { titulo: 'Estado de Flujo de Efectivo',      icono: '💧' },
+  cxc:              { titulo: 'Cuentas por Cobrar',               icono: '💵' },
+  cxp:              { titulo: 'Cuentas por Pagar',                icono: '💸' },
+  libro_ventas:     { titulo: 'Libro de Ventas',                  icono: '🧾' },
+  libro_compras:    { titulo: 'Libro de Compras',                 icono: '🛒' },
+  libro_honorarios: { titulo: 'Libro de Honorarios',              icono: '👔' }
+};
+
+// =============================================================================
+// ABRIR REPORTE - Solo muestra filtros, NO carga datos
+// =============================================================================
+
+function abrirReporte(tipo) {
+  reporteActual = tipo;
+  datosReporteActual = null;
+
+  var cfg = REPORTES_CONFIG[tipo] || { titulo: 'Reporte', icono: '📋' };
+  document.getElementById('reporteTitle').textContent = cfg.icono + ' ' + cfg.titulo;
+
+  renderFiltrosReporte(tipo);
+
+  document.getElementById('reporteContenido').innerHTML =
+    '<div class="rep-empty">' +
+      '<div class="rep-empty-icon">📋</div>' +
+      '<div class="rep-empty-text">Configure los filtros y presione Generar Reporte</div>' +
+      '<div class="rep-empty-hint">Los datos se cargarán bajo demanda</div>' +
+    '</div>';
+
+  // Deshabilitar Excel hasta que haya datos
+  var btnExcel = document.getElementById('btnExportExcel');
+  if (btnExcel) btnExcel.disabled = true;
+
+  abrirModal('modalReporte');
+}
+
+// =============================================================================
+// RENDERIZAR FILTROS según tipo de reporte
+// =============================================================================
+
+function renderFiltrosReporte(tipo) {
+  var año = datosContabilidad ? datosContabilidad.añoActivo : 2025;
+  var html = '';
+
+  // Año (todos los reportes)
+  html += '<div class="rep-filtro">';
+  html += '<label>Año</label>';
+  html += '<select id="repAño">';
+  for (var y = año - 2; y <= año + 1; y++) {
+    html += '<option value="' + y + '"' + (y === año ? ' selected' : '') + '>' + y + '</option>';
+  }
+  html += '</select></div>';
+
+  switch (tipo) {
+    case 'libro_diario':
+    case 'libro_ventas':
+    case 'libro_compras':
+    case 'libro_honorarios':
+      html += buildMesFilter('repMes', 'Mes', true);
+      break;
+
+    case 'libro_mayor':
+      html += buildMesFilter('repMesDesde', 'Desde', false, 1);
+      html += buildMesFilter('repMesHasta', 'Hasta', false, 12);
+      html += buildCuentaFilter();
+      break;
+
+    case 'balance_8':
+    case 'eeff':
+      html += buildMesFilter('repMesHasta', 'Hasta Mes', false, 12);
+      break;
+
+    case 'estado_resultados':
+    case 'flujo_efectivo':
+      html += buildMesFilter('repMesDesde', 'Desde', false, 1);
+      html += buildMesFilter('repMesHasta', 'Hasta', false, 12);
+      break;
+
+    case 'cxc':
+      html += buildCuentaPendFilter('A');
+      html += buildAuxiliarFilter();
+      html += buildVistaFilter();
+      break;
+    case 'cxp':
+      html += buildCuentaPendFilter('P');
+      html += buildAuxiliarFilter();
+      html += buildVistaFilter();
+      break;
+  }
+
+  html += '<div class="rep-filtro" style="align-self:flex-end">';
+  html += '<button class="rep-btn-generar" onclick="generarReporte()" id="btnGenerarRep">';
+  html += '▶ Generar Reporte</button></div>';
+
+  document.getElementById('reporteFiltros').innerHTML = html;
+}
+
+function buildMesFilter(id, label, conTodos, defVal) {
+  var meses = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var html = '<div class="rep-filtro"><label>' + label + '</label><select id="' + id + '">';
+  if (conTodos) html += '<option value="0">Todo el año</option>';
+  for (var m = 1; m <= 12; m++) {
+    var sel = (defVal && m === defVal) ? ' selected' : '';
+    html += '<option value="' + m + '"' + sel + '>' + meses[m] + '</option>';
+  }
+  html += '</select></div>';
+  return html;
+}
+
+function buildCuentaFilter() {
+  var html = '<div class="rep-filtro cuenta-filtro"><label>Cuenta</label>';
+  html += '<input type="text" id="repCuentaBuscar" placeholder="🔍 Buscar cuenta..." oninput="filtrarCuentasReporte()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;margin-bottom:4px">';
+  html += '<select id="repCuenta" size="1" style="width:100%">';
+  html += '<option value="TODAS">-- TODAS LAS CUENTAS --</option>';
+  html += '<option value="ACTIVOS">📁 Activos (1-xx)</option>';
+  html += '<option value="PASIVOS">📁 Pasivos (2-xx)</option>';
+  html += '<option value="PATRIMONIO">📁 Patrimonio (3-xx)</option>';
+  html += '<option value="INGRESOS">📁 Ingresos (4-xx)</option>';
+  html += '<option value="GASTOS">📁 Gastos (5-xx a 7-xx)</option>';
+
+  if (cuentasMovimiento && cuentasMovimiento.length > 0) {
+    html += '<optgroup label="─── Cuentas individuales ───">';
+    for (var i = 0; i < cuentasMovimiento.length; i++) {
+      var c = cuentasMovimiento[i];
+      html += '<option value="' + c.codigo + '">' + c.codigo + ' - ' + c.nombre + '</option>';
+    }
+    html += '</optgroup>';
+  }
+  html += '</select></div>';
+  return html;
+}
+
+function filtrarCuentasReporte() {
+  var q = (document.getElementById('repCuentaBuscar').value || '').toLowerCase();
+  var sel = document.getElementById('repCuenta');
+  if (!sel) return;
+  for (var i = 0; i < sel.options.length; i++) {
+    var opt = sel.options[i];
+    if (opt.parentElement.tagName === 'OPTGROUP') {
+      // Cuentas individuales: filtrar por texto
+      var texto = opt.textContent.toLowerCase();
+      opt.style.display = (!q || texto.indexOf(q) !== -1) ? '' : 'none';
+    }
+    // Las opciones principales (TODAS, ACTIVOS, etc.) siempre visibles
+  }
+  // Si hay búsqueda y una cuenta coincide exactamente, seleccionarla
+  if (q.length >= 3) {
+    for (var i = 0; i < sel.options.length; i++) {
+      var opt = sel.options[i];
+      if (opt.style.display !== 'none' && opt.value !== 'TODAS' && opt.value.indexOf('-') !== -1) {
+        var texto = opt.textContent.toLowerCase();
+        if (texto.indexOf(q) !== -1) { sel.value = opt.value; break; }
+      }
+    }
+  }
+}
+
+function buildCuentaPendFilter(tipoCuenta) {
+  var label = tipoCuenta === 'A' ? 'Cuenta por Cobrar' : 'Cuenta por Pagar';
+  var prefijos = tipoCuenta === 'A' ? ['1'] : ['2'];
+  
+  var html = '<div class="rep-filtro cuenta-filtro"><label>' + label + '</label>';
+  html += '<select id="repCuenta">';
+  html += '<option value="TODAS">-- TODAS --</option>';
+  
+  for (var i = 0; i < cuentasMovimiento.length; i++) {
+    var c = cuentasMovimiento[i];
+    if (c.requiereDocumento) {
+      var primerDigito = c.codigo.charAt(0);
+      for (var p = 0; p < prefijos.length; p++) {
+        if (primerDigito === prefijos[p]) {
+          html += '<option value="' + c.codigo + '">' + c.codigo + ' - ' + c.nombre + '</option>';
+          break;
+        }
+      }
+    }
+  }
+  
+  html += '</select></div>';
+  return html;
+}
+
+function buildAuxiliarFilter() {
+  var html = '<div class="rep-filtro"><label>Auxiliar</label>';
+  html += '<div class="aux-autocomplete-wrap" style="min-width:200px">';
+  html += '<input type="hidden" id="repAuxiliar" value="">';
+  html += '<input type="text" id="repAuxBuscar" placeholder="Todos los auxiliares..." autocomplete="off"'
+    + ' onkeyup="buscarAuxiliarReporte()" onfocus="buscarAuxiliarReporte()">';
+  html += '<button type="button" class="aux-clear-btn" id="repAuxClear" onclick="limpiarAuxiliarReporte()" style="display:none">✕</button>';
+  html += '<div class="aux-dropdown" id="repAuxDropdown"></div>';
+  html += '</div></div>';
+  return html;
+}
+
+function buildVistaFilter() {
+  var html = '<div class="rep-filtro"><label>Vista</label>';
+  html += '<select id="repVista">';
+  html += '<option value="pendientes">Solo pendientes</option>';
+  html += '<option value="todos">Todos (con pagos)</option>';
+  html += '</select></div>';
+  return html;
+}
+
+var _repAuxDebounce = null;
+
+function buscarAuxiliarReporte() {
+  var input = document.getElementById('repAuxBuscar');
+  var dropdown = document.getElementById('repAuxDropdown');
+  var texto = input.value.trim();
+  
+  if (texto.length < 2) { dropdown.innerHTML = ''; dropdown.style.display = 'none'; return; }
+  
+  clearTimeout(_repAuxDebounce);
+  _repAuxDebounce = setTimeout(function() {
+    google.script.run
+      .withSuccessHandler(function(resultados) {
+        var dd = document.getElementById('repAuxDropdown');
+        if (!resultados || resultados.length === 0) {
+          dd.innerHTML = '<div class="aux-dd-empty">Sin resultados</div>';
+          dd.style.display = 'block';
+          return;
+        }
+        var html = '';
+        for (var i = 0; i < resultados.length; i++) {
+          var a = resultados[i];
+          html += '<div class="aux-dd-item" onclick="seleccionarAuxiliarReporte(\'' + a.rutNumero + '\',\'' + a.rut + ' - ' + a.nombre.replace(/'/g, "\\'") + '\')">'
+            + '<span class="aux-dd-rut">' + a.rut + '</span>'
+            + '<span class="aux-dd-nombre">' + a.nombre + '</span>'
+            + '<span class="aux-dd-tipo badge badge-info">' + a.tipo + '</span>'
+            + '</div>';
+        }
+        dd.innerHTML = html;
+        dd.style.display = 'block';
+      })
+      .withFailureHandler(function() { dropdown.style.display = 'none'; })
+      .buscarAuxiliaresUI(texto);
+  }, 300);
+}
+
+function seleccionarAuxiliarReporte(rutNumero, displayText) {
+  document.getElementById('repAuxiliar').value = rutNumero;
+  document.getElementById('repAuxBuscar').value = displayText;
+  document.getElementById('repAuxDropdown').style.display = 'none';
+  document.getElementById('repAuxClear').style.display = 'inline-block';
+}
+
+function limpiarAuxiliarReporte() {
+  document.getElementById('repAuxiliar').value = '';
+  document.getElementById('repAuxBuscar').value = '';
+  document.getElementById('repAuxClear').style.display = 'none';
+}
+
+// =============================================================================
+// GENERAR REPORTE - Carga datos bajo demanda
+// =============================================================================
+
+function generarReporte() {
+  if (!reporteActual) return;
+
+  var btn = document.getElementById('btnGenerarRep');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-sm"></span> Generando...';
+
+  document.getElementById('reporteContenido').innerHTML =
+    '<div class="rep-loading"><div class="spinner-lg"></div><div class="rep-loading-text">Generando reporte...</div></div>';
+
+  var params = getParametrosReporte();
+
+  google.script.run
+    .withSuccessHandler(function(data) {
+      btn.disabled = false;
+      btn.innerHTML = '▶ Generar Reporte';
+      if (!data) {
+        document.getElementById('reporteContenido').innerHTML =
+          '<div class="rep-empty"><div class="rep-empty-icon">⚠️</div><div class="rep-empty-text">Error al generar el reporte</div></div>';
+        return;
+      }
+      datosReporteActual = data;
+      renderReporte(reporteActual, data);
+      var btnExcel = document.getElementById('btnExportExcel');
+      if (btnExcel) btnExcel.disabled = false;
+    })
+    .withFailureHandler(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = '▶ Generar Reporte';
+      document.getElementById('reporteContenido').innerHTML =
+        '<div class="rep-empty"><div class="rep-empty-icon">❌</div><div class="rep-empty-text">Error: ' + e.message + '</div></div>';
+    })
+    .exportarReporte(reporteActual, params);
+}
+
+function getParametrosReporte() {
+  var año = parseInt(document.getElementById('repAño').value) || 2025;
+  var params = { año: año };
+
+  var elMes = document.getElementById('repMes');
+  var elMesDesde = document.getElementById('repMesDesde');
+  var elMesHasta = document.getElementById('repMesHasta');
+  var elCuenta = document.getElementById('repCuenta');
+  var elAuxiliar = document.getElementById('repAuxiliar');
+  var elVista = document.getElementById('repVista');
+
+  if (elMes) params.mes = parseInt(elMes.value) || 0;
+  if (elMesDesde) params.mesDesde = parseInt(elMesDesde.value) || 1;
+  if (elMesHasta) params.mesHasta = parseInt(elMesHasta.value) || 12;
+  if (elCuenta) params.cuenta = elCuenta.value;
+  if (elAuxiliar) params.auxiliar = elAuxiliar.value || '';
+  if (elVista) params.vista = elVista.value || 'pendientes';
+
+  return params;
+}
+
+// =============================================================================
+// RENDER REPORTE - Despacha al renderer correcto
+// =============================================================================
+
+function renderReporte(tipo, data) {
+  if (data.error) {
+    document.getElementById('reporteContenido').innerHTML =
+      '<div class="rep-empty"><div class="rep-empty-icon">⚠️</div><div class="rep-empty-text">' + data.error + '</div></div>';
+    return;
+  }
+
+  var html = '';
+  switch (tipo) {
+    case 'libro_diario':     html = renderLibroDiario(data); break;
+    case 'libro_mayor':      html = renderLibroMayor(data); break;
+    case 'balance_8':        html = renderBalance8(data); break;
+    case 'estado_resultados':html = renderEstadoResultados(data); break;
+    case 'flujo_efectivo':   html = renderFlujoEfectivo(data); break;
+    case 'eeff':             html = renderEstadoSituacion(data); break;
+    case 'cxc':              html = renderCxC(data); break;
+    case 'cxp':              html = renderCxP(data); break;
+    case 'libro_ventas':     html = renderLibroVentas(data); break;
+    case 'libro_compras':    html = renderLibroCompras(data); break;
+    case 'libro_honorarios': html = renderLibroHonorarios(data); break;
+    default: html = '<p>Reporte no implementado</p>';
+  }
+
+  document.getElementById('reporteContenido').innerHTML = html;
+}
+
+// =============================================================================
+// HEADER COMÚN
+// =============================================================================
+
+function repHeader(data, subtitulo) {
+  var emp = data.empresa || {};
+  var per = data.periodo || {};
+  return '<div class="rep-header-info">' +
+    '<div class="rep-header-empresa"><strong>' + (emp.nombre || 'Empresa') + '</strong>' + (emp.rut || '') + '</div>' +
+    '<div class="rep-header-periodo"><strong>' + subtitulo + '</strong>' +
+    (per.nombreMes ? per.nombreMes + ' ' : '') + (per.año || '') + '</div></div>';
+}
+
+// =============================================================================
+// LIBRO DIARIO
+// =============================================================================
+
+function renderLibroDiario(data) {
+  var comps = data.comprobantes || [];
+  var tot = data.totales || {};
+
+  var html = repHeader(data, 'Libro Diario');
+
+  html += '<div class="rep-summary">' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + comps.length + '</div><div class="rep-summary-label">Comprobantes</div></div>' +
+    '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(tot.debe) + '</div><div class="rep-summary-label">Total Debe</div></div>' +
+    '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(tot.haber) + '</div><div class="rep-summary-label">Total Haber</div></div>' +
+    '</div>';
+
+  if (comps.length === 0) return html + '<div class="rep-empty"><div class="rep-empty-text">Sin movimientos en el período</div></div>';
+
+  html += '<table class="rep-table"><thead><tr>' +
+    '<th>Fecha</th><th>Comp.</th><th>Tipo</th><th>Cuenta</th><th>Glosa</th>' +
+    '<th class="text-right">Debe</th><th class="text-right">Haber</th></tr></thead><tbody>';
+
+  for (var i = 0; i < comps.length; i++) {
+    var c = comps[i];
+    // Header del comprobante
+    html += '<tr class="subtotal-row"><td>' + fmtFecha(c.fecha) + '</td><td>' + (c.id || '') + '</td>' +
+      '<td>' + (c.tipo || '') + '</td><td colspan="2">' + (c.glosa || '') + '</td>' +
+      '<td class="text-right">' + fmtMoney(c.totalDebe) + '</td><td class="text-right">' + fmtMoney(c.totalHaber) + '</td></tr>';
+    // Líneas
+    var lineas = c.lineas || [];
+    for (var j = 0; j < lineas.length; j++) {
+      var l = lineas[j];
+      html += '<tr><td></td><td></td><td></td><td>' + (l.cuenta || '') + '</td><td>' + (l.glosa || '') + '</td>' +
+        '<td class="text-right">' + (l.debe > 0 ? fmtMoney(l.debe) : '') + '</td>' +
+        '<td class="text-right">' + (l.haber > 0 ? fmtMoney(l.haber) : '') + '</td></tr>';
+    }
+  }
+
+  html += '<tr class="total-row"><td colspan="5">TOTALES</td>' +
+    '<td class="text-right">' + fmtMoney(tot.debe) + '</td><td class="text-right">' + fmtMoney(tot.haber) + '</td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+// =============================================================================
+// LIBRO MAYOR
+// =============================================================================
+
+function renderLibroMayor(data) {
+  var html = repHeader(data, 'Libro Mayor');
+  html += '<div class="rep-header-periodo"><strong>' + (data.titulo || '') + '</strong>' +
+    (data.nombreMesDesde || '') + ' a ' + (data.nombreMesHasta || '') + '</div>';
+
+  if (data.esMultiple) {
+    var cuentas = data.cuentas || [];
+    html += '<div class="rep-summary">' +
+      '<div class="rep-summary-card"><div class="rep-summary-value">' + cuentas.length + '</div><div class="rep-summary-label">Cuentas con movimiento</div></div>' +
+      '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(data.totalGeneralDebe) + '</div><div class="rep-summary-label">Total Debe</div></div>' +
+      '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(data.totalGeneralHaber) + '</div><div class="rep-summary-label">Total Haber</div></div></div>';
+
+    for (var i = 0; i < cuentas.length; i++) {
+      html += renderMayorCuenta(cuentas[i]);
+    }
+  } else {
+    html += renderMayorCuenta(data);
+  }
+  return html;
+}
+
+function renderMayorCuenta(cta) {
+  var codigo = cta.cuenta ? cta.cuenta.codigo : (cta.codigo || '');
+  var nombre = cta.cuenta ? cta.cuenta.nombre : (cta.nombre || '');
+  var movs = cta.movimientos || [];
+
+  var html = '<div class="rep-section-title">' + codigo + ' - ' + nombre + '</div>';
+  html += '<table class="rep-table"><thead><tr>' +
+    '<th>Fecha</th><th>Comprobante</th><th>Auxiliar</th><th>Tipo Doc</th><th>N° Doc</th>' +
+    '<th class="text-right">Debe</th><th class="text-right">Haber</th><th class="text-right">Saldo</th><th>Glosa</th></tr></thead><tbody>';
+
+  html += '<tr class="saldo-anterior"><td colspan="7">Saldo Anterior</td><td class="text-right">' + fmtMoney(cta.saldoAnterior) + '</td><td></td></tr>';
+
+  for (var j = 0; j < movs.length; j++) {
+    var m = movs[j];
+    html += '<tr><td>' + fmtFecha(m.fecha) + '</td><td>' + (m.comprobante || '') + '</td>' +
+      '<td>' + (m.auxiliar || '') + '</td><td>' + (m.tipoDoc || '') + '</td><td>' + (m.numDoc || '') + '</td>' +
+      '<td class="text-right">' + (m.debe > 0 ? fmtMoney(m.debe) : '') + '</td>' +
+      '<td class="text-right">' + (m.haber > 0 ? fmtMoney(m.haber) : '') + '</td>' +
+      '<td class="text-right">' + fmtMoney(m.saldo) + '</td><td>' + (m.glosa || '') + '</td></tr>';
+  }
+
+  html += '<tr class="total-row"><td colspan="5">TOTALES</td>' +
+    '<td class="text-right">' + fmtMoney(cta.totalDebe) + '</td><td class="text-right">' + fmtMoney(cta.totalHaber) + '</td>' +
+    '<td class="text-right">' + fmtMoney(cta.saldoFinal) + '</td><td></td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+// =============================================================================
+// BALANCE 8 COLUMNAS
+// =============================================================================
+
+function renderBalance8(data) {
+  var cuentas = data.cuentas || [];
+  var totales = data.totales || {};
+
+  var html = repHeader(data, 'Balance de Comprobación - 8 Columnas');
+
+  html += '<div class="eerr-scroll-wrap"><table class="rep-table bal8-table"><thead>' +
+    '<tr class="bal8-group-header">' +
+    '<th colspan="2"></th>' +
+    '<th colspan="2" class="bal8-group">Valores Acumulados</th>' +
+    '<th colspan="2" class="bal8-group">Saldos</th>' +
+    '<th colspan="2" class="bal8-group">Inventario</th>' +
+    '<th colspan="2" class="bal8-group">Resultados</th>' +
+    '</tr>' +
+    '<tr>' +
+    '<th style="min-width:100px">Cuenta Contable</th><th style="min-width:180px"></th>' +
+    '<th class="text-right" style="min-width:100px">Débitos</th><th class="text-right" style="min-width:100px">Créditos</th>' +
+    '<th class="text-right" style="min-width:100px">Deudor</th><th class="text-right" style="min-width:100px">Acreedor</th>' +
+    '<th class="text-right" style="min-width:100px">Activo</th><th class="text-right" style="min-width:100px">Pasivo</th>' +
+    '<th class="text-right" style="min-width:100px">Pérdida</th><th class="text-right" style="min-width:100px">Ganancia</th>' +
+    '</tr></thead><tbody>';
+
+  for (var i = 0; i < cuentas.length; i++) {
+    var c = cuentas[i];
+    html += '<tr>' +
+      '<td class="bal8-codigo">' + c.codigo + '</td><td>' + c.nombre + '</td>' +
+      '<td class="text-right">' + bal8Fmt(c.debitos) + '</td><td class="text-right">' + bal8Fmt(c.creditos) + '</td>' +
+      '<td class="text-right">' + bal8Fmt(c.deudor) + '</td><td class="text-right">' + bal8Fmt(c.acreedor) + '</td>' +
+      '<td class="text-right">' + bal8Fmt(c.activo) + '</td><td class="text-right">' + bal8Fmt(c.pasivo) + '</td>' +
+      '<td class="text-right">' + bal8Fmt(c.perdida) + '</td><td class="text-right">' + bal8Fmt(c.ganancia) + '</td></tr>';
+  }
+
+  // Sub-Totales
+  html += '<tr class="bal8-subtotal"><td colspan="2"><strong>Sub-Totales</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.debitos) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.creditos) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.deudor) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.acreedor) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.activo) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.pasivo) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.perdida) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.ganancia) + '</strong></td></tr>';
+  
+  // Pérdidas / Ganancias — cuadra cada par independientemente
+  html += '<tr class="bal8-pg"><td colspan="2"><strong>Pérdidas / Ganancias</strong></td>' +
+    '<td colspan="4"></td>' +
+    '<td class="text-right"><strong>' + bal8Fmt(data.pgActivo) + '</strong></td>' +
+    '<td class="text-right"><strong>' + bal8Fmt(data.pgPasivo) + '</strong></td>' +
+    '<td class="text-right"><strong>' + bal8Fmt(data.pgPerdida) + '</strong></td>' +
+    '<td class="text-right"><strong>' + bal8Fmt(data.pgGanancia) + '</strong></td></tr>';
+  
+  // Total General
+  html += '<tr class="bal8-total"><td colspan="2"><strong>Total General</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.debitos) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.creditos) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.deudor) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.acreedor) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.activo + (data.pgActivo || 0)) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.pasivo + (data.pgPasivo || 0)) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.perdida + (data.pgPerdida || 0)) + '</strong></td>' +
+    '<td class="text-right"><strong>' + fmtMoney(totales.ganancia + (data.pgGanancia || 0)) + '</strong></td></tr>';
+
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function bal8Fmt(val) {
+  if (!val || val === 0) return '<span class="eerr-zero">0</span>';
+  return fmtMoney(val);
+}
+
+// =============================================================================
+// ESTADO DE RESULTADOS
+// =============================================================================
+
+function renderEstadoResultados(data) {
+  var MESES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var per = data.periodo || {};
+  var mDesde = per.mesDesde || 1, mHasta = per.mesHasta || 12;
+  var numMeses = mHasta - mDesde + 1;
+  var hayPrev = data.hayPrevio;
+  
+  var html = repHeader(data, 'Estado de Resultados');
+  
+  // Subtítulo período
+  html += '<div style="text-align:center;margin-bottom:16px;color:#64748b;font-size:13px">' +
+    (data.nombreMesDesde || 'Enero') + ' a ' + (data.nombreMesHasta || 'Diciembre') + ' ' + per.año;
+  if (hayPrev) html += ' — <em>Comparativo con ' + per.añoPrev + '</em>';
+  html += '</div>';
+  
+  // KPIs
+  var varIng = data.totalIngPrev ? ((data.totalIngresos - data.totalIngPrev) / Math.abs(data.totalIngPrev) * 100) : 0;
+  var varGas = data.totalGasPrev ? ((data.totalGastos - data.totalGasPrev) / Math.abs(data.totalGasPrev) * 100) : 0;
+  var varRes = data.resultadoPrev ? ((data.resultadoNeto - data.resultadoPrev) / Math.abs(data.resultadoPrev) * 100) : 0;
+  
+  html += '<div class="rep-summary">';
+  html += '<div class="rep-summary-card success"><div class="rep-summary-value">' + fmtMoney(data.totalIngresos) + '</div>' +
+    '<div class="rep-summary-label">Total Ingresos</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.totalIngPrev) + ' prev · ' + eerrFmtVar(varIng) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="rep-summary-card danger"><div class="rep-summary-value">' + fmtMoney(data.totalGastos) + '</div>' +
+    '<div class="rep-summary-label">Total Gastos</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.totalGasPrev) + ' prev · ' + eerrFmtVar(varGas) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="rep-summary-card ' + (data.resultadoNeto >= 0 ? 'success' : 'danger') + '">' +
+    '<div class="rep-summary-value">' + fmtMoney(data.resultadoNeto) + '</div>' +
+    '<div class="rep-summary-label">' + (data.resultadoNeto >= 0 ? 'UTILIDAD' : 'PÉRDIDA') + '</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.resultadoPrev) + ' prev · ' + eerrFmtVar(varRes) + '</div>';
+  html += '</div></div>';
+  
+  // --- TABLA MENSUAL ---
+  var colTotal = hayPrev ? 4 : 1; // Total + (Prev + Var% + Margen)
+  var totalCols = 2 + numMeses + colTotal; // Código + Cuenta + meses + totales
+  
+  html += '<div class="eerr-scroll-wrap"><table class="rep-table eerr-table">';
+  
+  // Header
+  html += '<thead><tr><th style="min-width:80px">Código</th><th style="min-width:160px">Cuenta</th>';
+  for (var m = mDesde; m <= mHasta; m++) {
+    html += '<th class="text-right" style="min-width:85px">' + MESES[m] + '</th>';
+  }
+  html += '<th class="text-right eerr-col-total" style="min-width:100px">Total ' + per.año + '</th>';
+  if (hayPrev) {
+    html += '<th class="text-right eerr-col-prev" style="min-width:100px">Total ' + per.añoPrev + '</th>';
+    html += '<th class="text-right eerr-col-var" style="min-width:70px">Var %</th>';
+    html += '<th class="text-right eerr-col-var" style="min-width:70px">Margen</th>';
+  }
+  html += '</tr></thead><tbody>';
+  
+  // --- INGRESOS ---
+  html += '<tr class="eerr-section-header eerr-ing"><td colspan="' + totalCols + '">INGRESOS</td></tr>';
+  html += eerrRenderCuentas(data.ingresos, mDesde, mHasta, hayPrev, data.totalIngresos);
+  
+  // Subtotal Ingresos
+  html += '<tr class="eerr-subtotal eerr-ing-total"><td></td><td>Total Ingresos</td>';
+  for (var m = mDesde; m <= mHasta; m++) {
+    html += '<td class="text-right">' + fmtMoney(data.totalIngMes[m] || 0) + '</td>';
+  }
+  html += '<td class="text-right">' + fmtMoney(data.totalIngresos) + '</td>';
+  if (hayPrev) {
+    html += '<td class="text-right">' + fmtMoney(data.totalIngPrev) + '</td>';
+    html += '<td class="text-right">' + eerrFmtVar(varIng) + '</td>';
+    html += '<td class="text-right">100%</td>';
+  }
+  html += '</tr>';
+  
+  // Separador
+  html += '<tr class="eerr-spacer"><td colspan="' + totalCols + '"></td></tr>';
+  
+  // --- GASTOS ---
+  html += '<tr class="eerr-section-header eerr-gas"><td colspan="' + totalCols + '">GASTOS</td></tr>';
+  html += eerrRenderCuentas(data.gastos, mDesde, mHasta, hayPrev, data.totalIngresos);
+  
+  // Subtotal Gastos
+  html += '<tr class="eerr-subtotal eerr-gas-total"><td></td><td>Total Gastos</td>';
+  for (var m = mDesde; m <= mHasta; m++) {
+    html += '<td class="text-right">' + fmtMoney(data.totalGasMes[m] || 0) + '</td>';
+  }
+  html += '<td class="text-right">' + fmtMoney(data.totalGastos) + '</td>';
+  if (hayPrev) {
+    html += '<td class="text-right">' + fmtMoney(data.totalGasPrev) + '</td>';
+    html += '<td class="text-right">' + eerrFmtVar(varGas) + '</td>';
+    var margenGas = data.totalIngresos ? ((data.totalGastos / data.totalIngresos) * 100).toFixed(1) + '%' : '—';
+    html += '<td class="text-right">' + margenGas + '</td>';
+  }
+  html += '</tr>';
+  
+  // Separador
+  html += '<tr class="eerr-spacer"><td colspan="' + totalCols + '"></td></tr>';
+  
+  // --- RESULTADO NETO ---
+  var clsRes = data.resultadoNeto >= 0 ? 'eerr-resultado-pos' : 'eerr-resultado-neg';
+  html += '<tr class="eerr-resultado ' + clsRes + '"><td></td><td><strong>' + 
+    (data.resultadoNeto >= 0 ? 'UTILIDAD DEL EJERCICIO' : 'PÉRDIDA DEL EJERCICIO') + '</strong></td>';
+  for (var m = mDesde; m <= mHasta; m++) {
+    html += '<td class="text-right"><strong>' + fmtMoney(data.resultadoMes[m] || 0) + '</strong></td>';
+  }
+  html += '<td class="text-right"><strong>' + fmtMoney(data.resultadoNeto) + '</strong></td>';
+  if (hayPrev) {
+    html += '<td class="text-right"><strong>' + fmtMoney(data.resultadoPrev) + '</strong></td>';
+    html += '<td class="text-right"><strong>' + eerrFmtVar(varRes) + '</strong></td>';
+    var margenNeto = data.totalIngresos ? ((data.resultadoNeto / data.totalIngresos) * 100).toFixed(1) + '%' : '—';
+    html += '<td class="text-right"><strong>' + margenNeto + '</strong></td>';
+  }
+  html += '</tr>';
+  
+  html += '</tbody></table></div>';
+  return html;
+}
+
+// Helpers EERR
+function eerrRenderCuentas(cuentas, mDesde, mHasta, hayPrev, totalIngRef) {
+  var html = '';
+  cuentas = cuentas || [];
+  for (var i = 0; i < cuentas.length; i++) {
+    var c = cuentas[i];
+    html += '<tr><td class="eerr-codigo">' + c.codigo + '</td><td>' + c.nombre + '</td>';
+    for (var m = mDesde; m <= mHasta; m++) {
+      var val = Math.abs(c.montos[m] || 0);
+      html += '<td class="text-right">' + (val ? fmtMoney(val) : '<span class="eerr-zero">—</span>') + '</td>';
+    }
+    html += '<td class="text-right eerr-col-total"><strong>' + fmtMoney(Math.abs(c.total)) + '</strong></td>';
+    if (hayPrev) {
+      html += '<td class="text-right eerr-col-prev">' + fmtMoney(Math.abs(c.totalPrev || 0)) + '</td>';
+      html += '<td class="text-right eerr-col-var">' + eerrFmtVar(c.variacion || 0) + '</td>';
+      var margen = totalIngRef ? ((Math.abs(c.total) / totalIngRef) * 100).toFixed(1) + '%' : '—';
+      html += '<td class="text-right">' + margen + '</td>';
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+
+function eerrFmtVar(pct) {
+  if (pct === 0) return '<span style="color:#94a3b8">0%</span>';
+  var color = pct > 0 ? '#059669' : '#dc2626';
+  var arrow = pct > 0 ? '▲' : '▼';
+  return '<span style="color:' + color + ';font-weight:500">' + arrow + ' ' + Math.abs(pct).toFixed(1) + '%</span>';
+}
+
+// =============================================================================
+// ESTADO DE FLUJO DE EFECTIVO
+// =============================================================================
+
+function renderFlujoEfectivo(data) {
+  var MESES = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var per = data.periodo || {};
+  var mDesde = per.mesDesde || 1, mHasta = per.mesHasta || 12;
+  var numMeses = mHasta - mDesde + 1;
+  var hayPrev = data.hayPrevio;
+  
+  var html = repHeader(data, 'Estado de Flujo de Efectivo');
+  
+  // Subtítulo
+  html += '<div style="text-align:center;margin-bottom:16px;color:#64748b;font-size:13px">' +
+    (data.nombreMesDesde || 'Enero') + ' a ' + (data.nombreMesHasta || 'Diciembre') + ' ' + per.año;
+  if (hayPrev) html += ' — <em>Comparativo con ' + per.añoPrev + '</em>';
+  html += '</div>';
+  
+  // KPIs
+  var varFlujo = data.totalFlujoPrev ? ((data.totalFlujo - data.totalFlujoPrev) / Math.abs(data.totalFlujoPrev) * 100) : 0;
+  
+  html += '<div class="rep-summary">';
+  html += '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(data.saldoInicial) + '</div>' +
+    '<div class="rep-summary-label">Saldo Inicial</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.saldoInicialPrev) + ' prev</div>';
+  html += '</div>';
+  
+  html += '<div class="rep-summary-card ' + (data.totalFlujo >= 0 ? 'success' : 'danger') + '">' +
+    '<div class="rep-summary-value">' + fmtMoney(data.totalFlujo) + '</div>' +
+    '<div class="rep-summary-label">Variación Neta</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.totalFlujoPrev) + ' prev · ' + eerrFmtVar(varFlujo) + '</div>';
+  html += '</div>';
+  
+  html += '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(data.saldoFinal) + '</div>' +
+    '<div class="rep-summary-label">Saldo Final</div>';
+  if (hayPrev) html += '<div class="eerr-kpi-prev">' + fmtMoney(data.saldoFinalPrev) + ' prev</div>';
+  html += '</div></div>';
+  
+  // Columnas
+  var colTotal = hayPrev ? 3 : 1;
+  var totalCols = 2 + numMeses + colTotal;
+  
+  html += '<div class="eerr-scroll-wrap"><table class="rep-table eerr-table">';
+  
+  // Header
+  html += '<thead><tr><th style="min-width:50px">Cód</th><th style="min-width:160px">Categoría</th>';
+  for (var m = mDesde; m <= mHasta; m++) html += '<th class="text-right" style="min-width:85px">' + MESES[m] + '</th>';
+  html += '<th class="text-right eerr-col-total" style="min-width:100px">Total ' + per.año + '</th>';
+  if (hayPrev) {
+    html += '<th class="text-right eerr-col-prev" style="min-width:100px">Total ' + per.añoPrev + '</th>';
+    html += '<th class="text-right eerr-col-var" style="min-width:70px">Var %</th>';
+  }
+  html += '</tr></thead><tbody>';
+  
+  // Saldo inicial
+  html += '<tr class="efe-saldo-row"><td></td><td><strong>Saldo Inicial de Efectivo</strong></td>';
+  for (var m = mDesde; m <= mHasta; m++) html += '<td class="text-right">—</td>';
+  html += '<td class="text-right"><strong>' + fmtMoney(data.saldoInicial) + '</strong></td>';
+  if (hayPrev) {
+    html += '<td class="text-right">' + fmtMoney(data.saldoInicialPrev) + '</td>';
+    html += '<td></td>';
+  }
+  html += '</tr>';
+  html += '<tr class="eerr-spacer"><td colspan="' + totalCols + '"></td></tr>';
+  
+  // Secciones
+  var SEC_COLORS = {
+    'Operacional':    { bg: '#eff6ff', fg: '#1e40af', border: '#3b82f6' },
+    'Inversión':      { bg: '#f5f3ff', fg: '#5b21b6', border: '#8b5cf6' },
+    'Financiamiento': { bg: '#fffbeb', fg: '#92400e', border: '#f59e0b' }
+  };
+  
+  var secciones = data.secciones || [];
+  for (var s = 0; s < secciones.length; s++) {
+    var sec = secciones[s];
+    var col = SEC_COLORS[sec.tipo] || { bg: '#f8fafc', fg: '#334155', border: '#94a3b8' };
+    
+    // Section header
+    html += '<tr class="efe-section-header" style="background:' + col.bg + '"><td colspan="' + totalCols + '" style="color:' + col.fg + ';border-bottom:2px solid ' + col.border + '">' +
+      'FLUJOS DE ACTIVIDADES DE ' + sec.tipo.toUpperCase() + '</td></tr>';
+    
+    // Categorías
+    var cats = sec.categorias || [];
+    for (var c = 0; c < cats.length; c++) {
+      var cat = cats[c];
+      html += '<tr><td class="eerr-codigo">' + cat.codigo + '</td><td>' + cat.nombre + '</td>';
+      for (var m = mDesde; m <= mHasta; m++) {
+        var val = cat.montos[m] || 0;
+        var cls = val > 0 ? 'efe-pos' : (val < 0 ? 'efe-neg' : '');
+        html += '<td class="text-right ' + cls + '">' + (val ? fmtMoney(val) : '<span class="eerr-zero">—</span>') + '</td>';
+      }
+      html += '<td class="text-right eerr-col-total"><strong>' + efeFmtVal(cat.total) + '</strong></td>';
+      if (hayPrev) {
+        html += '<td class="text-right eerr-col-prev">' + efeFmtVal(cat.totalPrev || 0) + '</td>';
+        html += '<td class="text-right eerr-col-var">' + eerrFmtVar(cat.variacion || 0) + '</td>';
+      }
+      html += '</tr>';
+    }
+    
+    if (cats.length === 0) {
+      html += '<tr><td></td><td colspan="' + (totalCols - 1) + '" style="color:#94a3b8;font-style:italic">Sin movimientos clasificados</td></tr>';
+    }
+    
+    // Subtotal sección
+    html += '<tr class="eerr-subtotal" style="background:' + col.bg + '"><td></td>' +
+      '<td style="color:' + col.fg + '">Flujo Neto ' + sec.tipo + '</td>';
+    for (var m = mDesde; m <= mHasta; m++) {
+      html += '<td class="text-right" style="color:' + col.fg + '">' + efeFmtVal(sec.subTotalMes[m] || 0) + '</td>';
+    }
+    html += '<td class="text-right" style="color:' + col.fg + '"><strong>' + efeFmtVal(sec.subTotal) + '</strong></td>';
+    if (hayPrev) {
+      html += '<td class="text-right">' + efeFmtVal(sec.subTotalPrev) + '</td>';
+      html += '<td class="text-right">' + eerrFmtVar(sec.variacion) + '</td>';
+    }
+    html += '</tr>';
+    html += '<tr class="eerr-spacer"><td colspan="' + totalCols + '"></td></tr>';
+  }
+  
+  // Sin categoría
+  if (data.sinCategoria) {
+    var sc = data.sinCategoria;
+    html += '<tr class="efe-sin-cat"><td></td><td style="color:#94a3b8;font-style:italic">Movimientos sin categoría</td>';
+    for (var m = mDesde; m <= mHasta; m++) {
+      html += '<td class="text-right">' + efeFmtVal(sc.montos[m] || 0) + '</td>';
+    }
+    html += '<td class="text-right"><strong>' + efeFmtVal(sc.total) + '</strong></td>';
+    if (hayPrev) {
+      html += '<td class="text-right">' + efeFmtVal(sc.totalPrev) + '</td>';
+      html += '<td></td>';
+    }
+    html += '</tr>';
+    html += '<tr class="eerr-spacer"><td colspan="' + totalCols + '"></td></tr>';
+  }
+  
+  // Variación neta total
+  var clsVar = data.totalFlujo >= 0 ? 'eerr-resultado-pos' : 'eerr-resultado-neg';
+  html += '<tr class="eerr-resultado ' + clsVar + '"><td></td><td><strong>VARIACIÓN NETA DE EFECTIVO</strong></td>';
+  for (var m = mDesde; m <= mHasta; m++) {
+    html += '<td class="text-right"><strong>' + efeFmtVal(data.totalFlujoMes[m] || 0) + '</strong></td>';
+  }
+  html += '<td class="text-right"><strong>' + fmtMoney(data.totalFlujo) + '</strong></td>';
+  if (hayPrev) {
+    html += '<td class="text-right"><strong>' + fmtMoney(data.totalFlujoPrev) + '</strong></td>';
+    html += '<td class="text-right"><strong>' + eerrFmtVar(varFlujo) + '</strong></td>';
+  }
+  html += '</tr>';
+  
+  // Saldo final
+  html += '<tr class="efe-saldo-row efe-saldo-final"><td></td><td><strong>SALDO FINAL DE EFECTIVO</strong></td>';
+  for (var m = mDesde; m <= mHasta; m++) html += '<td class="text-right">—</td>';
+  html += '<td class="text-right"><strong>' + fmtMoney(data.saldoFinal) + '</strong></td>';
+  if (hayPrev) {
+    html += '<td class="text-right"><strong>' + fmtMoney(data.saldoFinalPrev) + '</strong></td>';
+    html += '<td></td>';
+  }
+  html += '</tr>';
+  
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function efeFmtVal(val) {
+  if (!val || val === 0) return '<span class="eerr-zero">—</span>';
+  var cls = val > 0 ? 'efe-pos' : 'efe-neg';
+  return '<span class="' + cls + '">' + fmtMoney(val) + '</span>';
+}
+
+// =============================================================================
+// CUENTAS POR COBRAR
+// =============================================================================
+
+function renderCxC(data) {
+  return renderCuentasPendientes(data, 'Cuentas por Cobrar', 'highlight');
+}
+
+// =============================================================================
+// CUENTAS POR PAGAR
+// =============================================================================
+
+function renderCxP(data) {
+  return renderCuentasPendientes(data, 'Cuentas por Pagar', 'danger');
+}
+
+function renderCuentasPendientes(data, titulo, estilo) {
+  var html = repHeader(data, titulo);
+  var multiCuenta = data.cuentas && data.cuentas.length > 1;
+  var vistaTodos = data.vista === 'todos';
+  
+  // Info filtros activos
+  var filtroInfo = '';
+  if (data.cuenta) filtroInfo += '<strong>Cuenta:</strong> ' + (data.cuenta.codigo || '') + ' - ' + (data.cuenta.nombre || '');
+  if (data.auxiliarFiltro) {
+    var auxObj = null;
+    var docs = data.documentos || [];
+    if (docs.length > 0) filtroInfo += ' &nbsp;|&nbsp; <strong>Auxiliar:</strong> ' + (docs[0].rut || '') + ' - ' + (docs[0].nombre || '');
+  }
+  if (vistaTodos) filtroInfo += ' &nbsp;|&nbsp; <span class="badge badge-info">Vista completa (con pagos)</span>';
+  if (filtroInfo) html += '<div style="margin-bottom:12px;font-size:14px">' + filtroInfo + '</div>';
+
+  // Aging (solo pendientes)
+  var rangos = data.antiguedad || [];
+  html += '<div class="rep-aging-grid">';
+  for (var i = 0; i < rangos.length; i++) {
+    var r = rangos[i];
+    html += '<div class="rep-aging-card"><div class="rep-aging-rango">' + r.nombre + '</div>' +
+      '<div class="rep-aging-monto">' + fmtMoney(r.total) + '</div>' +
+      '<div class="rep-aging-docs">' + r.documentos.length + ' docs</div></div>';
+  }
+  html += '</div>';
+
+  // Summary
+  html += '<div class="rep-summary"><div class="rep-summary-card ' + estilo + '">' +
+    '<div class="rep-summary-value">' + fmtMoney(data.totalSaldo) + '</div>' +
+    '<div class="rep-summary-label">Saldo Pendiente (' + (data.totalPendientes || data.cantidadDocumentos || 0) + ' docs)</div></div>';
+  if (vistaTodos && data.totalPagados > 0) {
+    html += '<div class="rep-summary-card" style="background:#f0fdf4;border-color:#86efac">' +
+      '<div class="rep-summary-value" style="color:#16a34a">✓ ' + data.totalPagados + '</div>' +
+      '<div class="rep-summary-label">Docs Pagados</div></div>';
+  }
+  html += '</div>';
+
+  var docs = data.documentos || [];
+  if (docs.length > 0) {
+    html += '<table class="rep-table"><thead><tr>';
+    if (multiCuenta) html += '<th>Cuenta</th>';
+    html += '<th>RUT</th><th>Nombre</th><th>Documento</th><th>Fecha</th><th class="text-center">Días</th><th class="text-right">Monto Orig.</th><th class="text-right">Saldo</th>';
+    if (vistaTodos) html += '<th class="text-center">Estado</th>';
+    html += '</tr></thead><tbody>';
+    
+    for (var i = 0; i < docs.length; i++) {
+      var d = docs[i];
+      var esPagado = d.estado === 'PAGADO';
+      var rowClass = esPagado ? ' class="rep-row-pagado"' : '';
+      
+      html += '<tr' + rowClass + '>';
+      if (multiCuenta) html += '<td><small>' + (d.cuenta || '') + '</small></td>';
+      html += '<td><code>' + (d.rut || '') + '</code></td>'
+        + '<td>' + (d.nombre || '') + '</td>'
+        + '<td>' + (d.tipoDoc || '') + ' ' + (d.numDoc || '') + '</td>'
+        + '<td>' + (d.fecha || '') + '</td>'
+        + '<td class="text-center">' + (d.diasAntiguedad || 0) + '</td>'
+        + '<td class="text-right">' + fmtMoney(d.montoOriginal || 0) + '</td>'
+        + '<td class="text-right">' + fmtMoney(d.saldo) + '</td>';
+      if (vistaTodos) {
+        var badgeClass = esPagado ? 'badge-success' : 'badge-warning';
+        html += '<td class="text-center"><span class="badge ' + badgeClass + '">' + d.estado + '</span></td>';
+      }
+      html += '</tr>';
+      
+      // Si vista=todos, mostrar detalle de movimientos debajo
+      if (vistaTodos && d.movimientos && d.movimientos.length > 1) {
+        var colSpanTotal = (multiCuenta ? 9 : 8) + 1;
+        html += '<tr class="rep-row-detalle"><td colspan="' + colSpanTotal + '">'
+          + '<div class="rep-movimientos-detalle">'
+          + '<table class="rep-table-mini"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Tipo</th><th>Glosa</th><th class="text-right">Debe</th><th class="text-right">Haber</th></tr></thead><tbody>';
+        for (var m = 0; m < d.movimientos.length; m++) {
+          var mov = d.movimientos[m];
+          html += '<tr>'
+            + '<td><small>' + (mov.comprobante || '') + '</small></td>'
+            + '<td>' + (mov.fecha || '') + '</td>'
+            + '<td>' + (mov.tipoMov || '') + '</td>'
+            + '<td>' + (mov.glosa || '') + '</td>'
+            + '<td class="text-right">' + (mov.debe > 0 ? fmtMoney(mov.debe) : '') + '</td>'
+            + '<td class="text-right">' + (mov.haber > 0 ? fmtMoney(mov.haber) : '') + '</td>'
+            + '</tr>';
+        }
+        html += '</tbody></table></div></td></tr>';
+      }
+    }
+    var colSpan = (multiCuenta ? 7 : 6) + (vistaTodos ? 1 : 0);
+    html += '<tr class="total-row"><td colspan="' + colSpan + '"><strong>TOTAL</strong></td><td class="text-right"><strong>' + fmtMoney(data.totalSaldo) + '</strong></td>';
+    if (vistaTodos) html += '<td></td>';
+    html += '</tr>';
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="rep-empty"><div class="rep-empty-icon">✅</div><div class="rep-empty-text">No hay documentos</div></div>';
+  }
+  return html;
+}
+
+// =============================================================================
+// LIBROS TRIBUTARIOS (Ventas, Compras, Honorarios)
+// =============================================================================
+
+function renderLibroVentas(data) {
+  var ventas = data.ventas || [];
+  var html = repHeader(data, 'Libro de Ventas');
+
+  // Recalcular totales considerando NC (tipo 61)
+  var totExento = 0, totNeto = 0, totIva = 0, totTotal = 0;
+  for (var i = 0; i < ventas.length; i++) {
+    var signo = esNotaCredito(ventas[i].tipoDTE) ? -1 : 1;
+    totExento += (ventas[i].exento || 0) * signo;
+    totNeto += (ventas[i].neto || 0) * signo;
+    totIva += (ventas[i].iva || 0) * signo;
+    totTotal += (ventas[i].total || 0) * signo;
+  }
+
+  html += '<div class="rep-summary">' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + ventas.length + '</div><div class="rep-summary-label">Documentos</div></div>' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(totNeto) + '</div><div class="rep-summary-label">Neto</div></div>' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(totIva) + '</div><div class="rep-summary-label">IVA</div></div>' +
+    '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(totTotal) + '</div><div class="rep-summary-label">Total</div></div></div>';
+
+  if (ventas.length === 0) return html + '<div class="rep-empty"><div class="rep-empty-text">Sin ventas en el período</div></div>';
+
+  html += '<table class="rep-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Folio</th><th>RUT</th><th>Razón Social</th>' +
+    '<th class="text-right">Exento</th><th class="text-right">Neto</th><th class="text-right">IVA</th><th class="text-right">Total</th></tr></thead><tbody>';
+
+  for (var i = 0; i < ventas.length; i++) {
+    var v = ventas[i];
+    var signo = esNotaCredito(v.tipoDTE) ? -1 : 1;
+    var claseNC = signo < 0 ? ' class="rep-negativo"' : '';
+    html += '<tr><td>' + v.fecha + '</td><td>' + v.tipoDTE + '</td><td>' + v.folio + '</td><td>' + v.rut + '</td><td>' + truncar(v.razonSocial, 30) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((v.exento||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((v.neto||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((v.iva||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtMoney((v.total||0)*signo) + '</td></tr>';
+  }
+
+  html += '<tr class="total-row"><td colspan="5">TOTALES</td>' +
+    '<td class="text-right">' + fmtMoney(totExento) + '</td><td class="text-right">' + fmtMoney(totNeto) + '</td>' +
+    '<td class="text-right">' + fmtMoney(totIva) + '</td><td class="text-right">' + fmtMoney(totTotal) + '</td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderLibroCompras(data) {
+  var compras = data.compras || [];
+  var html = repHeader(data, 'Libro de Compras');
+
+  // Recalcular totales considerando NC (tipo 60, 61)
+  var totExento = 0, totNeto = 0, totIva = 0, totTotal = 0;
+  for (var i = 0; i < compras.length; i++) {
+    var signo = esNotaCredito(compras[i].tipoDTE) ? -1 : 1;
+    totExento += (compras[i].exento || 0) * signo;
+    totNeto += (compras[i].neto || 0) * signo;
+    totIva += (compras[i].iva || 0) * signo;
+    totTotal += (compras[i].total || 0) * signo;
+  }
+
+  html += '<div class="rep-summary">' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + compras.length + '</div><div class="rep-summary-label">Documentos</div></div>' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(totNeto) + '</div><div class="rep-summary-label">Neto</div></div>' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(totIva) + '</div><div class="rep-summary-label">IVA</div></div>' +
+    '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(totTotal) + '</div><div class="rep-summary-label">Total</div></div></div>';
+
+  if (compras.length === 0) return html + '<div class="rep-empty"><div class="rep-empty-text">Sin compras en el período</div></div>';
+
+  html += '<table class="rep-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Folio</th><th>RUT</th><th>Razón Social</th>' +
+    '<th class="text-right">Exento</th><th class="text-right">Neto</th><th class="text-right">IVA</th><th class="text-right">Total</th></tr></thead><tbody>';
+
+  for (var i = 0; i < compras.length; i++) {
+    var c = compras[i];
+    var signo = esNotaCredito(c.tipoDTE) ? -1 : 1;
+    var claseNC = signo < 0 ? ' class="rep-negativo"' : '';
+    html += '<tr><td>' + c.fecha + '</td><td>' + c.tipoDTE + '</td><td>' + c.folio + '</td><td>' + c.rut + '</td><td>' + truncar(c.razonSocial, 30) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((c.exento||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((c.neto||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtN((c.iva||0)*signo) + '</td>' +
+      '<td class="text-right"' + claseNC + '>' + fmtMoney((c.total||0)*signo) + '</td></tr>';
+  }
+
+  html += '<tr class="total-row"><td colspan="5">TOTALES</td>' +
+    '<td class="text-right">' + fmtMoney(totExento) + '</td><td class="text-right">' + fmtMoney(totNeto) + '</td>' +
+    '<td class="text-right">' + fmtMoney(totIva) + '</td><td class="text-right">' + fmtMoney(totTotal) + '</td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderLibroHonorarios(data) {
+  var hons = data.honorarios || [];
+  var tot = data.totales || {};
+  var html = repHeader(data, 'Libro de Honorarios');
+
+  html += '<div class="rep-summary">' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + tot.cantidad + '</div><div class="rep-summary-label">Boletas</div></div>' +
+    '<div class="rep-summary-card"><div class="rep-summary-value">' + fmtMoney(tot.bruto) + '</div><div class="rep-summary-label">Total Bruto</div></div>' +
+    '<div class="rep-summary-card danger"><div class="rep-summary-value">' + fmtMoney(tot.retencion) + '</div><div class="rep-summary-label">Retención</div></div>' +
+    '<div class="rep-summary-card highlight"><div class="rep-summary-value">' + fmtMoney(tot.liquido) + '</div><div class="rep-summary-label">Líquido</div></div></div>';
+
+  if (hons.length === 0) return html + '<div class="rep-empty"><div class="rep-empty-text">Sin honorarios en el período</div></div>';
+
+  html += '<table class="rep-table"><thead><tr><th>Fecha</th><th>N°</th><th>RUT</th><th>Nombre</th>' +
+    '<th class="text-right">Bruto</th><th class="text-right">Retención</th><th class="text-right">Líquido</th></tr></thead><tbody>';
+
+  for (var i = 0; i < hons.length; i++) {
+    var h = hons[i];
+    html += '<tr><td>' + h.fecha + '</td><td>' + h.numero + '</td><td>' + h.rut + '</td><td>' + truncar(h.nombre, 30) + '</td>' +
+      '<td class="text-right">' + fmtMoney(h.bruto) + '</td><td class="text-right">' + fmtMoney(h.retencion) + '</td><td class="text-right">' + fmtMoney(h.liquido) + '</td></tr>';
+  }
+
+  html += '<tr class="total-row"><td colspan="4">TOTALES</td>' +
+    '<td class="text-right">' + fmtMoney(tot.bruto) + '</td><td class="text-right">' + fmtMoney(tot.retencion) + '</td><td class="text-right">' + fmtMoney(tot.liquido) + '</td></tr>';
+  html += '</tbody></table>';
+  return html;
+}
+
+// =============================================================================
+// EXPORTAR EXCEL
+// =============================================================================
+
+function exportarExcel() {
+  if (!reporteActual || !datosReporteActual) {
+    showToast('Primero genere un reporte', 'error');
+    return;
+  }
+
+  var btn = document.getElementById('btnExportExcel');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-sm"></span> Generando Excel...';
+
+  var params = getParametrosReporte();
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      btn.innerHTML = '📥 Exportar Excel';
+      if (result && result.url) {
+        window.open(result.url, '_blank');
+        showToast('Excel descargado correctamente');
+        // Eliminar archivo temporal de Drive
+        if (result.id) {
+          setTimeout(function() {
+            google.script.run.eliminarArchivoTempUI(result.id);
+          }, 5000);
+        }
+      } else if (result && result.error) {
+        showToast(result.error, 'error');
+      } else {
+        showToast('Error al generar Excel', 'error');
+      }
+    })
+    .withFailureHandler(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = '📥 Exportar Excel';
+      showToast('Error: ' + e.message, 'error');
+    })
+    .exportarReporteExcel(reporteActual, params);
+}
+
+function imprimirReporte() {
+  window.print();
+}
+
+function exportarConsolidado() {
+  var params = getParametrosReporte();
+  if (!params.año) params.año = new Date().getFullYear();
+  
+  showToast('Generando EE.FF Consolidado... puede tomar un momento');
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (result && result.url) {
+        window.open(result.url, '_blank');
+        showToast('Consolidado descargado: ' + (result.hojas || []).join(', '));
+        if (result.id) {
+          setTimeout(function() {
+            google.script.run.eliminarArchivoTempUI(result.id);
+          }, 5000);
+        }
+      } else if (result && result.error) {
+        showToast(result.error, 'error');
+      } else {
+        showToast('Error al generar consolidado', 'error');
+      }
+    })
+    .withFailureHandler(function(e) {
+      showToast('Error: ' + e.message, 'error');
+    })
+    .exportarReporteExcel('consolidado', params);
+}
+
+// =============================================================================
+// UTILIDADES
+// =============================================================================
+
+function fmtMoney(n) {
+  if (n === null || n === undefined) return '$0';
+  var num = Math.round(Number(n));
+  if (isNaN(num)) return '$0';
+  var neg = num < 0;
+  num = Math.abs(num);
+  var str = num.toLocaleString('es-CL');
+  return (neg ? '-$' : '$') + str;
+}
+
+function fmtN(n) {
+  if (!n || n === 0) return '';
+  return fmtMoney(n);
+}
+
+function truncar(s, l) {
+  if (!s) return '';
+  return s.length > l ? s.substring(0, l) + '...' : s;
+}
+
+function esNotaCredito(tipoDTE) {
+  var t = parseInt(tipoDTE);
+  // 61: NC electrónica venta, 60: NC compra
+  // 56: Nota de DÉBITO → NO es NC, debe SUMAR
+  return t === 61 || t === 60;
+}
+
+function fmtFecha(f) {
+  if (!f) return '';
+  try {
+    var d = new Date(f);
+    if (isNaN(d.getTime())) return f;
+    var dd = ('0' + d.getDate()).slice(-2);
+    var mm = ('0' + (d.getMonth() + 1)).slice(-2);
+    return dd + '-' + mm + '-' + d.getFullYear();
+  } catch(e) { return f; }
+}
+
+// =============================================================================
+// ESTADO DE SITUACIÓN FINANCIERA
+// =============================================================================
+
+function renderEstadoSituacion(data) {
+  var per = data.periodo || {};
+  var hayPrev = data.hayPrevio;
+  var MESES = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var fechaStr = 'Al ' + (MESES[per.mesHasta] || 'Diciembre') + ' ' + per.año;
+  
+  var html = '<div class="rep-header">';
+  html += '<div class="rep-header-left"><div class="rep-company">' + (data.empresa ? data.empresa.nombre : '') + '</div>';
+  html += '<div class="rep-company-rut">' + (data.empresa ? data.empresa.rut : '') + '</div></div>';
+  html += '<div class="rep-header-right"><div class="rep-title">Estado de Situación Financiera</div>';
+  html += '<div class="rep-period">' + fechaStr + '</div></div></div>';
+  
+  function renderSeccion(seccion) {
+    var s = '';
+    // Sección header
+    s += '<tr class="rep-section-header"><td colspan="' + (hayPrev ? 5 : 2) + '">' + seccion.label + '</td></tr>';
+    
+    // Column headers
+    s += '<tr class="rep-col-header"><td></td><td class="text-right">' + per.año + '</td>';
+    if (hayPrev) s += '<td class="text-right">' + per.añoPrev + '</td><td class="text-right">Var $$</td><td class="text-right">Var %</td>';
+    s += '</tr>';
+    
+    for (var g = 0; g < seccion.grupos.length; g++) {
+      var grupo = seccion.grupos[g];
+      s += '<tr class="rep-group-header"><td colspan="' + (hayPrev ? 5 : 2) + '">' + grupo.nombre + '</td></tr>';
+      
+      for (var it = 0; it < grupo.items.length; it++) {
+        var item = grupo.items[it];
+        s += '<tr><td style="padding-left:24px">' + item.nombre + '</td>';
+        s += '<td class="text-right">' + formatMoney(item.saldo) + '</td>';
+        if (hayPrev) {
+          s += '<td class="text-right">' + formatMoney(item.saldoPrev) + '</td>';
+          s += '<td class="text-right">' + formatMoney(item.variacion) + '</td>';
+          s += '<td class="text-right">' + (item.saldoPrev !== 0 ? item.variacionPct.toFixed(1) + '%' : '-') + '</td>';
+        }
+        s += '</tr>';
+      }
+      
+      // Total grupo
+      s += '<tr class="rep-subtotal"><td>Total ' + grupo.nombre + '</td>';
+      s += '<td class="text-right">' + formatMoney(grupo.total) + '</td>';
+      if (hayPrev) {
+        s += '<td class="text-right">' + formatMoney(grupo.totalPrev) + '</td>';
+        s += '<td class="text-right">' + formatMoney(grupo.variacion) + '</td>';
+        s += '<td class="text-right">' + (grupo.totalPrev !== 0 ? grupo.variacionPct.toFixed(1) + '%' : '-') + '</td>';
+      }
+      s += '</tr>';
+    }
+    
+    // Total sección
+    s += '<tr class="rep-total"><td>Total ' + seccion.label + '</td>';
+    s += '<td class="text-right">' + formatMoney(seccion.total) + '</td>';
+    if (hayPrev) {
+      s += '<td class="text-right">' + formatMoney(seccion.totalPrev) + '</td>';
+      s += '<td class="text-right">' + formatMoney(seccion.variacion) + '</td>';
+      s += '<td class="text-right">' + (seccion.totalPrev !== 0 ? seccion.variacionPct.toFixed(1) + '%' : '-') + '</td>';
+    }
+    s += '</tr>';
+    s += '<tr><td colspan="' + (hayPrev ? 5 : 2) + '">&nbsp;</td></tr>';
+    return s;
+  }
+  
+  html += '<table class="rep-table">';
+  html += renderSeccion(data.activos);
+  html += renderSeccion(data.pasivos);
+  html += renderSeccion(data.patrimonio);
+  
+  // Total P+P
+  html += '<tr class="rep-total" style="background:#1a1a4e;color:#fff"><td>Total Pasivos + Patrimonio</td>';
+  html += '<td class="text-right">' + formatMoney(data.totalPasivoPatrimonio) + '</td>';
+  if (hayPrev) {
+    html += '<td class="text-right">' + formatMoney(data.totalPasivoPatrimonioPrev) + '</td>';
+    var varTPP = data.totalPasivoPatrimonio - data.totalPasivoPatrimonioPrev;
+    html += '<td class="text-right">' + formatMoney(varTPP) + '</td>';
+    html += '<td class="text-right">' + (data.totalPasivoPatrimonioPrev !== 0 ? ((varTPP / Math.abs(data.totalPasivoPatrimonioPrev)) * 100).toFixed(1) + '%' : '-') + '</td>';
+  }
+  html += '</tr>';
+  html += '</table>';
+  
+  return html;
+}
+</script>

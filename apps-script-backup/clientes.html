@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head><base target="_top"></head>
+<body>
+  <?!= include('sidebar_css') ?>
+  <?!= include('sidebar') ?>
+  <?!= include('clientes_css') ?>
+  
+  <div class="main-content">
+    <!-- Header -->
+    <div class="cl-header">
+      <div class="cl-header-left">
+        <div class="cl-header-icon">💰</div>
+        <div>
+          <h1 class="cl-title">Cobranza</h1>
+          <p class="cl-subtitle">Saldos por documento · Cuadra con contabilidad</p>
+        </div>
+      </div>
+      <button class="cl-btn-refresh" onclick="clInit()" title="Actualizar">🔄</button>
+    </div>
+    
+    <!-- KPIs -->
+    <section class="cl-kpis">
+      <div class="cl-kpi k-docs">
+        <div class="kpi-icon">📄</div>
+        <div class="kpi-body">
+          <span class="kpi-label">Docs Pendientes</span>
+          <span class="kpi-value" id="kDocs">—</span>
+        </div>
+      </div>
+      <div class="cl-kpi k-saldo">
+        <div class="kpi-icon">💰</div>
+        <div class="kpi-body">
+          <span class="kpi-label">Por Cobrar</span>
+          <span class="kpi-value" id="kSaldo">—</span>
+          <span class="kpi-sub" id="kMorosos"></span>
+        </div>
+      </div>
+      <div class="cl-kpi k-prom">
+        <div class="kpi-icon">📊</div>
+        <div class="kpi-body">
+          <span class="kpi-label">Saldo Promedio</span>
+          <span class="kpi-value" id="kProm">—</span>
+        </div>
+      </div>
+      <div class="cl-kpi k-dias">
+        <div class="kpi-icon">⏱️</div>
+        <div class="kpi-body">
+          <span class="kpi-label">Días Promedio</span>
+          <span class="kpi-value" id="kDias">—</span>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Distribution + Aging panels -->
+    <div class="cl-top-panels" id="topPanels" style="display:none">
+      <div class="cl-panel-card">
+        <div class="cl-panel-title">⏰ Distribución</div>
+        <div class="cl-donut-wrap">
+          <canvas id="donutCanvas" class="cl-donut-canvas" width="120" height="120"></canvas>
+          <div class="cl-donut-legend" id="donutLegend"></div>
+        </div>
+        <div style="margin-top:12px" id="distribStats"></div>
+      </div>
+      <div class="cl-panel-card">
+        <div class="cl-panel-title">📊 Antigüedad de Saldos</div>
+        <div class="cl-aging-bars" id="agingBars"></div>
+      </div>
+    </div>
+    
+    <!-- Tabs -->
+    <div class="cl-tabs">
+      <button class="cl-tab active" onclick="clTab('clientes')" id="tab-clientes">
+        Todos <span class="cl-tab-badge" id="badgeAll">0</span>
+      </button>
+      <button class="cl-tab" onclick="clTab('deuda')" id="tab-deuda">
+        Con Deuda <span class="cl-tab-badge cl-tab-warn" id="badgeDeuda">0</span>
+      </button>
+      <button class="cl-tab" onclick="clTab('pend')" id="tab-pend">
+        Morosos +30d <span class="cl-tab-badge cl-tab-danger" id="badgeMor">0</span>
+      </button>
+    </div>
+    
+    <!-- SALDO POR CLIENTE -->
+    <div class="cl-panel active" id="panel-clientes">
+      <div class="cl-bar"><input type="text" id="buscar" class="cl-search" placeholder="Buscar por RUT o nombre..." oninput="clFiltrar()"></div>
+      <div class="cl-table-wrap">
+        <table class="tb"><thead><tr>
+          <th class="c" style="width:40px">#</th><th>RUT</th><th>Cliente</th>
+          <th class="r">Debe</th><th class="r">Haber</th><th class="r">Saldo</th>
+          <th class="r">Docs</th><th class="r">Antigüedad</th><th class="c" style="width:60px"></th>
+        </tr></thead>
+        <tbody id="tbCli"></tbody>
+        <tfoot id="tfCli"></tfoot></table>
+      </div>
+    </div>
+    
+    <!-- CON DEUDA -->
+    <div class="cl-panel" id="panel-deuda">
+      <div class="cl-bar" style="display:flex;justify-content:space-between;align-items:center">
+        <input type="text" id="buscarDeuda" class="cl-search" placeholder="Buscar con deuda..." oninput="clFiltrar('deuda')">
+        <button onclick="clExportarMorosos()" style="padding:7px 18px;border:1px solid #059669;border-radius:8px;background:#fff;color:#059669;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap" onmouseover="this.style.background='#059669';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#059669'">📥 Descargar Excel</button>
+        <button class="admin-only" onclick="clAbrirCobranzaMasiva()" style="padding:7px 18px;border:1px solid #dc2626;border-radius:8px;background:#fff;color:#dc2626;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap" onmouseover="this.style.background='#dc2626';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#dc2626'">📧 Enviar Cobranza</button>
+        <button class="admin-only" onclick="clAbrirFacturacionMes()" style="padding:7px 18px;border:1px solid #4f46e5;border-radius:8px;background:#fff;color:#4f46e5;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap" onmouseover="this.style.background='#4f46e5';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#4f46e5'">📧 Enviar Facturación Mes</button>
+      </div>
+      <div class="cl-table-wrap">
+        <table class="tb"><thead><tr>
+          <th class="c" style="width:40px">#</th><th>RUT</th><th>Cliente</th>
+          <th class="r">Debe</th><th class="r">Haber</th><th class="r">Saldo</th>
+          <th class="r">Docs</th><th class="r">Antigüedad</th><th class="c" style="width:60px"></th>
+        </tr></thead>
+        <tbody id="tbDeuda"></tbody>
+        <tfoot id="tfDeuda"></tfoot></table>
+      </div>
+    </div>
+    
+    <!-- MOROSOS +30D (aging detail) -->
+    <div class="cl-panel" id="panel-pend">
+      <div id="tramosW"></div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+        <button onclick="clExportarMorosos()" id="btnExportMor" style="padding:7px 18px;border:1px solid #059669;border-radius:8px;background:#fff;color:#059669;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;transition:all .15s" onmouseover="this.style.background='#059669';this.style.color='#fff'" onmouseout="this.style.background='#fff';this.style.color='#059669'">📥 Descargar Excel</button>
+      </div>
+      <div class="cl-table-wrap">
+        <table class="tb"><thead><tr>
+          <th>RUT</th><th>Cliente</th><th class="c">Tipo</th><th>N° Doc</th><th>Fecha</th>
+          <th class="r">Registro</th><th class="r">Rebajas</th><th class="r">Saldo</th>
+          <th class="r">Días</th><th class="c">Tramo</th>
+        </tr></thead>
+        <tbody id="tbPend"></tbody>
+        <tfoot id="tfPend"></tfoot></table>
+      </div>
+    </div>
+    
+    <div class="cl-load" id="loadW" style="display:none"><div class="sp"></div><span>Cargando datos...</span></div>
+  </div>
+  
+  <!-- MODAL DETALLE CLIENTE -->
+  <div class="cl-modal-overlay" id="modalDet">
+    <div class="cl-modal">
+      <button class="cl-modal-close" onclick="clCerrarDet()">&times;</button>
+      
+      <div class="cl-modal-header">
+        <div class="cl-modal-profile">
+          <div class="cl-modal-avatar" id="mAvatar">—</div>
+          <div class="cl-modal-info">
+            <h2 id="mNombre">—</h2>
+            <p id="mRut">—</p>
+            <div class="cl-modal-badges" id="mBadges"></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="cl-modal-kpis">
+        <div class="cl-modal-kpi"><span class="cl-mkpi-label">Total Debe</span><span class="cl-mkpi-val blue" id="mDebe">$0</span></div>
+        <div class="cl-modal-kpi"><span class="cl-mkpi-label">Total Haber</span><span class="cl-mkpi-val green" id="mHaber">$0</span></div>
+        <div class="cl-modal-kpi"><span class="cl-mkpi-label">Pendiente</span><span class="cl-mkpi-val red" id="mSaldo">$0</span></div>
+        <div class="cl-modal-kpi"><span class="cl-mkpi-label">Documentos</span><span class="cl-mkpi-val gray" id="mDocs">0</span></div>
+      </div>
+      
+      <div class="cl-modal-body">
+        <div class="cl-modal-filters">
+          <button class="cl-filter-btn active" onclick="clFiltDet('pend',this)">Pendientes</button>
+          <button class="cl-filter-btn" onclick="clFiltDet('all',this)">Todos</button>
+        </div>
+        <div id="mBody"></div>
+      </div>
+      
+      <div class="cl-modal-footer">
+        <button class="cl-btn cl-btn-outline" onclick="clCerrarDet()">Cerrar</button>
+        <button class="cl-btn" id="btnEnviarDeuda" class="admin-only" style="display:none;background:#dc2626;color:#fff;border-color:#dc2626" onclick="clEnviarDeudaDesdeDet()">📧 Enviar Deuda</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MODAL: Composición de Email (individual) -->
+  <div class="cl-modal-overlay" id="modalEmail">
+    <div class="cl-modal" style="max-width:700px">
+      <button class="cl-modal-close" onclick="clCerrarEmail()">&times;</button>
+      <div style="padding:22px 28px;border-bottom:1px solid #e8ecf1;display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px" id="emIcon">📧</span>
+        <div><h3 style="margin:0;font-size:16px;font-weight:700;color:#1e1b4b" id="emTitle">Enviar Email</h3>
+        <p style="margin:2px 0 0;font-size:12px;color:#94a3b8" id="emSubtitle"></p></div>
+      </div>
+      <div style="padding:16px 28px;border-bottom:1px solid #f1f5f9;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:12px;font-weight:600;color:#64748b;width:40px">Para:</label>
+          <input type="text" id="emPara" style="flex:1;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px" readonly>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:12px;font-weight:600;color:#64748b;width:40px">CC:</label>
+          <input type="text" id="emCC" style="flex:1;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:12px;font-weight:600;color:#64748b;width:40px">Asunto:</label>
+          <input type="text" id="emAsunto" style="flex:1;padding:6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        </div>
+        <div id="emAdjunto" style="display:none;font-size:12px;color:#059669;padding:4px 0">📎 <span id="emAdjuntoNombre"></span></div>
+      </div>
+      <div style="padding:16px 28px;max-height:350px;overflow-y:auto;background:#f8fafc">
+        <div id="emPreview" contenteditable="true" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;outline:none;cursor:text"></div>
+        <div style="text-align:right;margin-top:6px;font-size:11px;color:#94a3b8">✏️ Haz click sobre el texto para editarlo</div>
+      </div>
+      <div style="padding:14px 28px;border-top:1px solid #e8ecf1;display:flex;justify-content:space-between;align-items:center;background:#fafbfd">
+        <span id="emStatus" style="font-size:12px;color:#94a3b8"></span>
+        <div style="display:flex;gap:10px">
+          <button class="cl-btn cl-btn-outline" onclick="clCerrarEmail()">Cancelar</button>
+          <button class="cl-btn" style="background:#4f46e5;color:#fff;border-color:#4f46e5" id="emBtnEnviar" onclick="clEnviarEmail()">📧 Enviar Correo</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MODAL: Facturación Masiva del Mes -->
+  <div class="cl-modal-overlay" id="modalFactMes">
+    <div class="cl-modal" style="max-width:850px">
+      <button class="cl-modal-close" onclick="document.getElementById('modalFactMes').classList.remove('open')">&times;</button>
+      <div style="padding:22px 28px;border-bottom:1px solid #e8ecf1">
+        <h3 style="margin:0;font-size:17px;font-weight:700;color:#1e1b4b">📧 Facturación Masiva del Mes</h3>
+        <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">Crea borradores en Gmail con factura PDF adjunta para cada cliente</p>
+      </div>
+      <div style="padding:16px 28px;border-bottom:1px solid #f1f5f9">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px">
+            <label style="font-size:12px;font-weight:600;color:#64748b">Año:</label>
+            <select id="fmAño" style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px" onchange="clCargarFactMes()"></select>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <label style="font-size:12px;font-weight:600;color:#64748b">Mes:</label>
+            <select id="fmMes" style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px" onchange="clCargarFactMes()"></select>
+          </div>
+          <button onclick="clCargarFactMes()" style="padding:5px 14px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:12px">🔄 Cargar</button>
+          <div style="flex:1"></div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <label style="font-size:12px;font-weight:600;color:#64748b">CC:</label>
+            <input type="text" id="fmCC" style="width:300px;padding:5px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px">
+          </div>
+        </div>
+      </div>
+      <div style="padding:16px 28px;max-height:400px;overflow-y:auto" id="fmBody">
+        <div style="text-align:center;color:#94a3b8;padding:40px">Seleccione año y mes, luego presione Cargar</div>
+      </div>
+      <div style="padding:14px 28px;border-top:1px solid #e8ecf1;display:flex;justify-content:space-between;align-items:center;background:#fafbfd">
+        <span id="fmStatus" style="font-size:12px;color:#94a3b8"></span>
+        <div style="display:flex;gap:10px">
+          <button class="cl-btn cl-btn-outline" onclick="document.getElementById('modalFactMes').classList.remove('open')">Cerrar</button>
+          <button class="cl-btn" style="background:#4f46e5;color:#fff;border-color:#4f46e5" id="fmBtnEnviar" onclick="clEnviarFactMasivo()" disabled>📧 Enviar Correos</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MODAL: Cobranza Masiva -->
+  <div class="cl-modal-overlay" id="modalCobrMasiva">
+    <div class="cl-modal" style="max-width:750px">
+      <button class="cl-modal-close" onclick="document.getElementById('modalCobrMasiva').classList.remove('open')">&times;</button>
+      <div style="padding:22px 28px;border-bottom:1px solid #e8ecf1">
+        <h3 style="margin:0;font-size:17px;font-weight:700;color:#dc2626">📧 Cobranza Masiva</h3>
+        <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">Envía recordatorios/avisos a todos los clientes con deuda</p>
+      </div>
+      <div style="padding:12px 28px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:6px">
+        <label style="font-size:12px;font-weight:600;color:#64748b">CC:</label>
+        <input type="text" id="cmCC" style="flex:1;padding:5px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px">
+      </div>
+      <div style="padding:16px 28px;max-height:400px;overflow-y:auto" id="cmBody">
+        <div style="text-align:center;color:#94a3b8;padding:40px">Cargando morosos...</div>
+      </div>
+      <div style="padding:14px 28px;border-top:1px solid #e8ecf1;display:flex;justify-content:space-between;align-items:center;background:#fafbfd">
+        <span id="cmStatus" style="font-size:12px;color:#94a3b8"></span>
+        <div style="display:flex;gap:10px">
+          <button class="cl-btn cl-btn-outline" onclick="document.getElementById('modalCobrMasiva').classList.remove('open')">Cerrar</button>
+          <button class="cl-btn" style="background:#dc2626;color:#fff;border-color:#dc2626" id="cmBtnEnviar" onclick="clEnviarCobrMasivo()">📧 Enviar Correos</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <?!= include('clientes_js') ?>
+</body>
+</html>

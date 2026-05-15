@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('sidebar_css'); ?>
+  <?!= include('conciliacion_css'); ?>
+</head>
+<body>
+  <?!= include('sidebar'); ?>
+  
+  <main class="main-content" id="mainContent">
+    <!-- Header -->
+    <header class="cb-header">
+      <div class="cb-header-left">
+        <h1>🏦 Cartola Bancaria</h1>
+        <span class="cb-subtitle" id="empresaLabel"></span>
+      </div>
+      <div class="cb-header-right">
+        <select id="selAño" class="cb-select" onchange="cbCargarDatos()"></select>
+        <select id="selMes" class="cb-select" onchange="cbCargarMovimientos()">
+          <option value="0">Todo el año</option>
+          <option value="1">Enero</option><option value="2">Febrero</option>
+          <option value="3">Marzo</option><option value="4">Abril</option>
+          <option value="5">Mayo</option><option value="6">Junio</option>
+          <option value="7">Julio</option><option value="8">Agosto</option>
+          <option value="9">Septiembre</option><option value="10">Octubre</option>
+          <option value="11">Noviembre</option><option value="12">Diciembre</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- KPIs -->
+    <section class="cb-kpis" id="kpisSection">
+      <div class="cb-kpi kpi-saldo">
+        <div class="cb-kpi-icon">🏦</div>
+        <div class="cb-kpi-data">
+          <span class="cb-kpi-value" id="kpiSaldoBanco">$0</span>
+          <span class="cb-kpi-label">Saldo Banco Santander</span>
+        </div>
+      </div>
+      <div class="cb-kpi kpi-pending">
+        <div class="cb-kpi-icon">📋</div>
+        <div class="cb-kpi-data">
+          <span class="cb-kpi-value" id="kpiPendientes">0</span>
+          <span class="cb-kpi-label">Pendientes</span>
+        </div>
+      </div>
+      <div class="cb-kpi kpi-done">
+        <div class="cb-kpi-icon">✅</div>
+        <div class="cb-kpi-data">
+          <span class="cb-kpi-value" id="kpiContabilizados">0</span>
+          <span class="cb-kpi-label">Contabilizados</span>
+        </div>
+      </div>
+      <div class="cb-kpi kpi-in">
+        <div class="cb-kpi-icon">📥</div>
+        <div class="cb-kpi-data">
+          <span class="cb-kpi-value" id="kpiAbonos">$0</span>
+          <span class="cb-kpi-label">Abonos</span>
+        </div>
+      </div>
+      <div class="cb-kpi kpi-out">
+        <div class="cb-kpi-icon">📤</div>
+        <div class="cb-kpi-data">
+          <span class="cb-kpi-value" id="kpiCargos">$0</span>
+          <span class="cb-kpi-label">Cargos</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filtros + Acciones -->
+    <section class="cb-toolbar">
+      <div class="cb-toolbar-left">
+        <div class="cb-filter-tabs">
+          <button class="cb-tab active" data-filter-estado="todos" onclick="cbFiltrarEstado('todos')">
+            Todos <span class="cb-badge" id="badgeTodos">0</span>
+          </button>
+          <button class="cb-tab" data-filter-estado="pendientes" onclick="cbFiltrarEstado('pendientes')">
+            Pendientes <span class="cb-badge badge-red" id="badgePend">0</span>
+          </button>
+          <button class="cb-tab" data-filter-estado="contabilizados" onclick="cbFiltrarEstado('contabilizados')">
+            Contabilizados <span class="cb-badge badge-green" id="badgeContab">0</span>
+          </button>
+          <span class="cb-filter-sep">│</span>
+          <button class="cb-tab active" data-filter-tipo="todos" onclick="cbFiltrarTipo('todos')">
+            Todos
+          </button>
+          <button class="cb-tab" data-filter-tipo="abonos" onclick="cbFiltrarTipo('abonos')">
+            Abonos <span class="cb-badge badge-blue" id="badgeAbonos">0</span>
+          </button>
+          <button class="cb-tab" data-filter-tipo="cargos" onclick="cbFiltrarTipo('cargos')">
+            Cargos <span class="cb-badge badge-orange" id="badgeCargos">0</span>
+          </button>
+          </button>
+        </div>
+        <div class="cb-search-box">
+          <span class="cb-search-icon">🔍</span>
+          <input type="text" id="cbBuscar" placeholder="Buscar por glosa, RUT o monto..." oninput="cbBuscarTexto()">
+          <button class="cb-search-clear" id="cbBuscarClear" onclick="cbLimpiarBusqueda()" style="display:none">✕</button>
+        </div>
+      </div>
+      <div class="cb-toolbar-right">
+        <button class="cb-btn cb-btn-outline" onclick="cbAbrirReglas()" id="btnReglas" title="Gestionar reglas de match automático">
+          ⚙ Reglas
+        </button>
+        <button class="cb-btn cb-btn-match" onclick="cbBuscarMatches()" id="btnMatch">
+          🔄 Match Automático
+        </button>
+        <button class="cb-btn cb-btn-primary" id="btnContabLote" onclick="cbAbrirContabLote()" disabled>
+          📝 Contabilizar Seleccionados (<span id="countSel">0</span>)
+        </button>
+      </div>
+    </section>
+
+    <!-- Tabla de movimientos -->
+    <section class="cb-table-wrap">
+      <table class="cb-table" id="tablaMovimientos">
+        <thead>
+          <tr>
+            <th class="cb-col-check"><input type="checkbox" id="checkAll" onchange="cbToggleAll()"></th>
+            <th class="cb-col-fecha cb-sortable" onclick="cbSort('fecha')">Fecha <span class="cb-sort-icon" id="sortFecha"></span></th>
+            <th class="cb-col-tipo cb-sortable" onclick="cbSort('tipo')">Tipo <span class="cb-sort-icon" id="sortTipo"></span></th>
+            <th class="cb-col-desc cb-sortable" onclick="cbSort('desc')">Descripción <span class="cb-sort-icon" id="sortDesc"></span></th>
+            <th class="cb-col-rut cb-sortable" onclick="cbSort('rut')">RUT <span class="cb-sort-icon" id="sortRut"></span></th>
+            <th class="cb-col-monto cb-sortable" onclick="cbSort('monto')">Monto <span class="cb-sort-icon" id="sortMonto"></span></th>
+            <th class="cb-col-saldo">Saldo</th>
+            <th class="cb-col-estado cb-sortable" onclick="cbSort('estado')">Estado <span class="cb-sort-icon" id="sortEstado"></span></th>
+            <th class="cb-col-acciones">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="tbodyMovimientos">
+          <tr><td colspan="9" class="cb-empty">Cargando movimientos...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Barra inferior sticky -->
+    <section class="cb-bottom-bar" id="bottomBar" style="display:none">
+      <div class="cb-bottom-info">
+        <span id="selInfo">0 movimientos seleccionados</span>
+        <span class="cb-bottom-monto" id="selMonto">$0</span>
+      </div>
+      <div class="cb-bottom-actions">
+        <button class="cb-btn cb-btn-outline" onclick="cbDeseleccionar()">Deseleccionar</button>
+        <button class="cb-btn cb-btn-primary admin-only" onclick="cbAbrirContabLote()">📝 Contabilizar</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- ================================================================== -->
+  <!-- MODAL: Contabilizar movimiento(s) -->
+  <!-- ================================================================== -->
+  <div class="cb-modal-overlay" id="modalContab">
+    <div class="cb-modal cb-modal-lg">
+      <div class="cb-modal-header">
+        <h2 id="modalContabTitulo">Contabilizar Movimiento</h2>
+        <button class="cb-modal-close" onclick="cbCerrarModal('modalContab')">&times;</button>
+      </div>
+      <div class="cb-modal-body">
+        <!-- Info del movimiento (single) o tabla (batch) -->
+        <div id="contabMovInfo"></div>
+        
+        <!-- Tabla de movimientos a contabilizar -->
+        <div id="contabLoteTable" style="display:none"></div>
+        
+        <!-- Asignación -->
+        <div class="cb-form-section">
+          <h3>Clasificación</h3>
+          <div class="cb-form-row">
+            <div class="cb-form-group cb-form-half">
+              <label>Tipo de Movimiento</label>
+              <select id="contabTipo" onchange="cbCambiarTipo()">
+                <option value="">— Seleccione —</option>
+              </select>
+            </div>
+            <div class="cb-form-group cb-form-half" id="grpCuentaContra" style="display:none">
+              <label>Cuenta Contrapartida</label>
+              <select id="contabCuenta" onchange="cbVerificarAtributosCuenta()"><option value="">— Seleccione —</option></select>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Auxiliar + Docs Pendientes -->
+        <div class="cb-form-section" id="seccionAuxiliar" style="display:none">
+          <h3>Auxiliar y Documentos</h3>
+          <div class="cb-form-row">
+            <div class="cb-form-group" style="flex:1">
+              <label>RUT Auxiliar</label>
+              <div class="cb-autocomplete-wrap">
+                <input type="text" id="contabRUT" placeholder="12.345.678-9" 
+                       oninput="cbBuscarAux(this.value)" autocomplete="off">
+                <div class="cb-autocomplete-list" id="auxSuggestions"></div>
+              </div>
+            </div>
+            <div class="cb-form-group" style="flex:1.5">
+              <label>Nombre</label>
+              <input type="text" id="contabNombre" readonly>
+            </div>
+          </div>
+          
+          <!-- Tipo REF: solo visible cuando cuenta requiere documento -->
+          <div class="cb-form-row" id="grpTipoRef" style="display:none">
+            <div class="cb-form-group" style="flex:1">
+              <label>Tipo de Referencia</label>
+              <div class="cb-ref-toggle">
+                <button class="cb-ref-btn active" id="refBtnRegistro" onclick="cbCambiarRef('REGISTRO')">
+                  📝 Registro (nuevo doc)
+                </button>
+                <button class="cb-ref-btn" id="refBtnRebaja" onclick="cbCambiarRef('REBAJA')">
+                  🔍 Rebaja (doc existente)
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Campos REGISTRO: tipo doc + número -->
+          <div class="cb-form-row" id="grpRegistroDoc" style="display:none">
+            <div class="cb-form-group" style="flex:0.6">
+              <label>Tipo Documento</label>
+              <select id="contabRegTipoDoc">
+                <option value="ANT">ANT - Anticipo</option>
+                <option value="PRE">PRE - Préstamo</option>
+                <option value="DEP">DEP - Depósito</option>
+                <option value="TRF">TRF - Transferencia</option>
+                <option value="OTR">OTR - Otro</option>
+              </select>
+            </div>
+            <div class="cb-form-group" style="flex:0.4">
+              <label>N° Documento</label>
+              <input type="text" id="contabRegNumDoc" placeholder="Auto (fila)" 
+                     title="Dejar vacío para usar N° fila automático">
+            </div>
+            <div class="cb-form-group" style="flex:1">
+              <label>&nbsp;</label>
+              <div class="cb-reg-hint">
+                ℹ️ Cada movimiento generará 1 comprobante con REF = REGISTRO
+              </div>
+            </div>
+          </div>
+          
+          <!-- Botón buscar docs (REBAJA) -->
+          <div class="cb-form-row" id="grpBuscarDocs" style="display:none">
+            <div class="cb-form-group">
+              <button class="cb-btn cb-btn-outline cb-btn-sm" onclick="cbBuscarPendientes()" 
+                      id="btnBuscarPend" title="Buscar documentos pendientes">
+                🔍 Buscar Docs Pendientes
+              </button>
+            </div>
+          </div>
+          
+          <!-- Tabla documentos pendientes -->
+          <div id="docsPendientesWrap" style="display:none">
+            <div class="cb-docs-header">
+              <span>📄 Documentos Pendientes</span>
+              <span class="cb-docs-total" id="docsPendTotal"></span>
+            </div>
+            <table class="cb-docs-table">
+              <thead>
+                <tr>
+                  <th><input type="checkbox" id="checkAllDocs" onchange="cbToggleAllDocs()"></th>
+                  <th>Tipo</th>
+                  <th>N° Doc</th>
+                  <th>Fecha</th>
+                  <th>Original</th>
+                  <th>Saldo</th>
+                  <th>A Pagar</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyDocsPend"></tbody>
+            </table>
+            <div class="cb-docs-footer">
+              <span>Total a aplicar: <strong id="totalAplicar">$0</strong></span>
+              <span>Diferencia: <strong id="difAplicar">$0</strong></span>
+            </div>
+
+          </div>
+        </div>
+        
+        <!-- Glosa -->
+        <div class="cb-form-section">
+          <div class="cb-form-row">
+            <div class="cb-form-group cb-form-half">
+              <label>Glosa</label>
+              <input type="text" id="contabGlosa" placeholder="Descripción del movimiento">
+            </div>
+            <div class="cb-form-group cb-form-half" id="grpCatFlujo">
+              <label>Categoría Flujo Efectivo</label>
+              <select id="contabCatFlujo"><option value="">— Sin categoría —</option></select>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Líneas adicionales al comprobante (extras) -->
+        <div class="cb-form-section" id="secLineasAdicionales" style="display:none">
+          <div id="linAdDifAviso" style="display:none;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#92400e">
+            ⚠️ Diferencia de <strong id="linAdDifMonto">$0</strong> — agregue líneas para cubrir (ej: comisión, retención, ajuste)
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <label style="font-weight:600;font-size:13px;color:#475569">📝 Líneas adicionales al comprobante</label>
+            <button class="cb-btn-small" onclick="cbLinAdAgregar()" style="padding:4px 12px;background:#8b5cf6;color:white;border:none;border-radius:5px;cursor:pointer;font-size:12px">➕ Agregar línea</button>
+          </div>
+          <div id="linAdContainer"></div>
+          <div id="linAdTotales" style="text-align:right;font-size:12px;color:#64748b;margin-top:4px"></div>
+          <div id="linAdCuadra" style="display:none;text-align:right;font-size:12px;margin-top:4px"></div>
+        </div>
+      </div>
+      
+      <!-- Toggle líneas adicionales -->
+      <div style="padding:0 20px 8px;text-align:center">
+        <button onclick="cbToggleLinAd()" id="btnToggleLinAd" style="background:none;border:1px dashed #94a3b8;color:#64748b;padding:4px 14px;border-radius:6px;cursor:pointer;font-size:12px">➕ Agregar líneas adicionales al comprobante</button>
+      </div>
+      
+      <div class="cb-modal-footer">
+        <span id="contabResumen" class="cb-modal-resumen"></span>
+        <button class="cb-btn cb-btn-outline" onclick="cbCerrarModal('modalContab')">Cancelar</button>
+        <button class="cb-btn cb-btn-primary" onclick="cbEjecutarContab()" id="btnEjecutar">
+          ✓ Contabilizar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- MODAL: Resultado batch -->
+  <!-- ================================================================== -->
+  <div class="cb-modal-overlay" id="modalResultado">
+    <div class="cb-modal">
+      <div class="cb-modal-header">
+        <h2>Resultado de Contabilización</h2>
+        <button class="cb-modal-close" onclick="cbCerrarModal('modalResultado')">&times;</button>
+      </div>
+      <div class="cb-modal-body" id="resultadoBody"></div>
+      <div class="cb-modal-footer">
+        <button class="cb-btn cb-btn-primary" onclick="cbCerrarModal('modalResultado')">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================== -->
+  <!-- MODAL: Match Automático Preview -->
+  <!-- ================================================================== -->
+  <div class="cb-modal-overlay" id="modalMatch">
+    <div class="cb-modal cb-modal-lg" style="max-width:1050px">
+      <div class="cb-modal-header">
+        <h2>🔄 Match Automático — Preview</h2>
+        <button class="cb-modal-close" onclick="cbCerrarModal('modalMatch')">&times;</button>
+      </div>
+      <div class="cb-modal-body" id="matchBody">
+        <div class="cb-loading">Buscando matches...</div>
+      </div>
+      <div class="cb-modal-footer">
+        <span id="matchResumen" class="cb-modal-resumen"></span>
+        <button class="cb-btn cb-btn-outline" onclick="cbCerrarModal('modalMatch')">Cancelar</button>
+        <button class="cb-btn cb-btn-match admin-only" onclick="cbContabilizarMatches()" id="btnContabMatches" disabled>
+          ✓ Contabilizar Seleccionados
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- OVERLAY: Progreso contabilización masiva -->
+  <div class="cb-modal-overlay" id="modalProgreso" style="display:none;z-index:10000">
+    <div class="cb-modal" style="max-width:480px">
+      <div class="cb-modal-header" style="border-bottom:none;padding-bottom:0">
+        <h2 id="progresoTitulo">⏳ Contabilizando...</h2>
+      </div>
+      <div class="cb-modal-body" style="padding:16px 24px 24px">
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span id="progresoTexto" style="font-size:13px;color:#64748b">Procesando...</span>
+            <span id="progresoPct" style="font-size:13px;font-weight:600;color:#6d28d9">0%</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:8px;height:12px;overflow:hidden">
+            <div id="progresoBarra" style="background:linear-gradient(90deg,#7c3aed,#a78bfa);height:100%;width:0%;border-radius:8px;transition:width 0.3s ease"></div>
+          </div>
+        </div>
+        <div id="progresoDetalle" style="font-size:12px;color:#94a3b8;text-align:center"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Reglas de Conciliación Automática -->
+  <div class="cb-modal-overlay" id="modalReglas">
+    <div class="cb-modal" style="max-width:780px">
+      <div class="cb-modal-header">
+        <h2>⚙ Reglas de Conciliación Automática</h2>
+        <button class="cb-modal-close" onclick="cbCerrarModal('modalReglas')">&times;</button>
+      </div>
+      <div class="cb-modal-body" style="padding:16px 24px">
+        <p style="font-size:13px;color:#64748b;margin:0 0 16px">
+          Las reglas permiten hacer match automático por descripción del banco, sin necesidad de RUT.
+        </p>
+        
+        <!-- Lista de reglas existentes -->
+        <div id="reglasLista" style="margin-bottom:16px"></div>
+        
+        <!-- Formulario nueva regla -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px">
+          <h3 style="font-size:14px;font-weight:600;color:#1e1b4b;margin:0 0 12px" id="reglaFormTitulo">➕ Nueva Regla</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="grid-column:1/3">
+              <label class="cb-label">Patrón (texto a buscar en descripción banco)</label>
+              <input type="text" class="cb-input" id="reglaPatron" placeholder="Ej: MANTENCION PLAN">
+            </div>
+            <div>
+              <label class="cb-label">Tipo Contabilización</label>
+              <select class="cb-input" id="reglaTipo" onchange="cbReglaTipoCambio()">
+                <option value="">— Seleccionar —</option>
+                <option value="COBRANZA">COBRANZA (Abono → rebaja CxC)</option>
+                <option value="PAGO">PAGO (Cargo → rebaja CxP)</option>
+                <option value="GASTO">GASTO (Cargo → directo a cuenta)</option>
+                <option value="INGRESO">INGRESO (Abono → directo a cuenta)</option>
+              </select>
+            </div>
+            <div id="reglaAuxWrap">
+              <label class="cb-label">Auxiliar (RUT)</label>
+              <input type="text" class="cb-input" id="reglaAuxiliar" placeholder="Ej: 76.123.456-7">
+            </div>
+            <div id="reglaCuentaWrap" style="display:none">
+              <label class="cb-label">Cuenta Contable</label>
+              <input type="text" class="cb-input" id="reglaCuenta" placeholder="Ej: 4-1-01-001">
+            </div>
+            <div>
+              <label class="cb-label">Glosa (opcional)</label>
+              <input type="text" class="cb-input" id="reglaGlosa" placeholder="Glosa para el comprobante">
+            </div>
+          </div>
+          <input type="hidden" id="reglaEditId" value="">
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <button class="cb-btn cb-btn-primary" onclick="cbGuardarRegla()">💾 Guardar</button>
+            <button class="cb-btn cb-btn-outline" onclick="cbLimpiarFormRegla()" style="display:none" id="btnCancelRegla">Cancelar</button>
+          </div>
+        </div>
+      </div>
+      <div class="cb-modal-footer">
+        <button class="cb-btn cb-btn-outline" onclick="cbCerrarModal('modalReglas')">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="cb-toast" id="cbToast"></div>
+
+  <?!= include('conciliacion_js'); ?>
+</body>
+</html>

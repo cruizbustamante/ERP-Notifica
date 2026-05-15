@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head><base target="_top"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('sidebar_css') ?>
+  <?!= include('ficha_css') ?>
+</head>
+<body>
+  <?!= include('sidebar') ?>
+  
+  <div class="main-content">
+    <div class="fc-header">
+      <div class="fc-header-left">
+        <div class="fc-header-icon">📋</div>
+        <div><h1 class="fc-title">Ficha Comercial</h1><p class="fc-subtitle">Gestión de receptores · Tarifas · Descuentos · Crecimiento</p></div>
+      </div>
+      <div class="fc-header-right">
+        <input type="text" class="fc-search" id="fcBuscar" placeholder="Buscar RUT, nombre, email..." oninput="fcFiltrar()">
+        <button class="fc-btn fc-btn-outline" onclick="fcAbrirReporteFact()" title="Reporte Facturación">📊 Facturación</button>
+        <button class="fc-btn fc-btn-primary admin-only" onclick="fcAbrirNuevo()">+ Nuevo</button>
+        <button class="fc-btn fc-btn-outline" onclick="fcCargar()">🔄</button>
+      </div>
+    </div>
+    
+    <section class="fc-kpis" id="fcKpis"></section>
+    
+    <!-- Crecimiento -->
+    <div class="fc-growth" id="fcGrowth" style="display:none">
+      <div class="fc-panel">
+        <div class="fc-panel-title">📊 Métricas Comerciales</div>
+        <div id="fcMetricas"></div>
+      </div>
+      <div class="fc-panel">
+        <div class="fc-panel-title">📈 Ingresos y Bajas (últimos 12 meses)</div>
+        <div style="margin-bottom:6px;font-size:11px;color:#94a3b8">🟩 Nuevos  🟥 Bajas</div>
+        <div class="fc-chart-bars" id="fcChart"></div>
+      </div>
+    </div>
+    
+    <div id="fcAlertas"></div>
+    
+    <div class="fc-tabs">
+      <button class="fc-tab active" onclick="fcTab('todos')" id="fcTabTodos">Todos <span class="fc-tab-badge" id="fcBadgeTodos">0</span></button>
+      <button class="fc-tab" onclick="fcTab('activos')" id="fcTabActivos">Activos <span class="fc-tab-badge" id="fcBadgeActivos">0</span></button>
+      <button class="fc-tab" onclick="fcTab('inactivos')" id="fcTabInactivos">Inactivos <span class="fc-tab-badge" id="fcBadgeInactivos">0</span></button>
+      <button class="fc-tab" onclick="fcTab('conDeuda')" id="fcTabConDeuda">Con Deuda <span class="fc-tab-badge" style="background:#fef3c7;color:#d97706" id="fcBadgeDeuda">0</span></button>
+    </div>
+    
+    <div class="fc-table-wrap">
+      <table class="fc-table"><thead><tr>
+        <th onclick="fcOrdenar('rut')">RUT</th>
+        <th onclick="fcOrdenar('razonSocial')">Cliente</th>
+        <th class="c" onclick="fcOrdenar('estado')">Estado</th>
+        <th class="c">Facturación</th>
+        <th class="r" onclick="fcOrdenar('tarifaSuscUF')">Tarifa UF</th>
+        <th class="c">Desc.</th>
+        <th class="r" onclick="fcOrdenar('saldoCxC')">Deuda CxC</th>
+        <th class="c" onclick="fcOrdenar('mesesCliente')">Meses</th>
+        <th class="c">Acciones</th>
+      </tr></thead><tbody id="fcTbody"></tbody></table>
+    </div>
+    
+    <div class="fc-loading" id="fcLoading" style="display:none"><div class="fc-sp"></div><span>Cargando...</span></div>
+  </div>
+  
+  <!-- MODAL DETALLE -->
+  <div class="fc-modal-overlay" id="fcModalDet">
+    <div class="fc-modal" style="max-width:780px">
+      <button class="fc-modal-close" onclick="fcCerrar('fcModalDet')">&times;</button>
+      <div class="fc-det-top" id="fcDetTop"></div>
+      <div class="fc-det-kpis" id="fcDetKpis"></div>
+      <div class="fc-det-body" id="fcDetBody"></div>
+      <div class="fc-modal-footer">
+        <button class="fc-btn fc-btn-outline" onclick="fcCerrar('fcModalDet')">Cerrar</button>
+        <button class="fc-btn" id="fcDetBtnEstado" class="admin-only" onclick="fcToggleEstado()">🔄 Estado</button>
+        <button class="fc-btn fc-btn-primary admin-only" onclick="fcEditarDesdeDetalle()">✏️ Editar</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MODAL CREAR/EDITAR -->
+  <div class="fc-modal-overlay" id="fcModalEdit">
+    <div class="fc-modal">
+      <div class="fc-modal-header"><h3 id="fcEditTitle">Nuevo Cliente</h3><button class="fc-modal-close" onclick="fcCerrar('fcModalEdit')">&times;</button></div>
+      <div class="fc-modal-body">
+        <div class="fc-form-section">👤 Datos del Cliente</div>
+        <div class="fc-form-grid">
+          <div class="fc-form-group"><label>RUT *</label><input type="text" id="fRut" placeholder="12.345.678-9"></div>
+          <div class="fc-form-group"><label>Razón Social *</label><input type="text" id="fRazon"></div>
+          <div class="fc-form-group"><label>Email</label><input type="email" id="fEmail"></div>
+          <div class="fc-form-group"><label>Teléfono</label><input type="text" id="fTelefono"></div>
+          <div class="fc-form-group"><label>Giro</label><input type="text" id="fGiro"></div>
+          <div class="fc-form-group"><label>Estado</label><select id="fEstado"><option value="Activo">Activo</option><option value="Inactivo">Inactivo</option></select></div>
+          <div class="fc-form-group fc-form-full"><label>Dirección</label><input type="text" id="fDireccion"></div>
+        </div>
+        <div class="fc-form-section">💰 Tarifas y Facturación</div>
+        <div class="fc-form-grid-3">
+          <div class="fc-form-group"><label>Tarifa Suscripción (UF)</label><input type="number" step="0.01" id="fTarifaSusc"></div>
+          <div class="fc-form-group"><label>Tarifa Capacitación (UF)</label><input type="number" step="0.01" id="fTarifaCap"></div>
+          <div class="fc-form-group"><label>Facturación</label><select id="fFactTipo"><option value="Mes Vencido">Mes Vencido</option><option value="Mes Anticipado">Mes Anticipado</option></select></div>
+          <div class="fc-form-group"><label>Tipo Documento</label><select id="fTipoDoc"><option value="Factura">Factura</option><option value="Boleta">Boleta</option></select></div>
+          <div class="fc-form-group"><label>Pago Cuotas Cap.</label><select id="fPagoCuotas"><option value="No">No</option><option value="Sí">Sí</option></select></div>
+        </div>
+        <div class="fc-form-section">🏷️ Descuento Comercial</div>
+        <div class="fc-form-grid-3">
+          <div class="fc-form-group"><label>Descuento (%)</label><input type="number" id="fDescPct" placeholder="0"></div>
+          <div class="fc-form-group"><label>Duración</label><input type="text" id="fDescMeses" placeholder="2 meses"></div>
+        </div>
+        <div class="fc-form-section">📅 Fechas</div>
+        <div class="fc-form-grid-3">
+          <div class="fc-form-group"><label>Fecha Ingreso</label><input type="date" id="fFechaIng"></div>
+          <div class="fc-form-group"><label>Primera Factura</label><input type="date" id="fFechaPrimFac"></div>
+          <div class="fc-form-group"><label>Capacitación</label><input type="date" id="fFechaCap"></div>
+          <div class="fc-form-group"><label>Factura Cap.</label><input type="date" id="fFechaFactCap"></div>
+          <div class="fc-form-group"><label>Inactividad</label><input type="date" id="fFechaInact"></div>
+        </div>
+        <div class="fc-form-section">📝 Notas</div>
+        <div class="fc-form-group fc-form-full"><textarea id="fNotas" rows="3" placeholder="Observaciones..."></textarea></div>
+      </div>
+      <div class="fc-modal-footer">
+        <button class="fc-btn fc-btn-outline" onclick="fcCerrar('fcModalEdit')">Cancelar</button>
+        <button class="fc-btn fc-btn-primary" id="fcBtnGuardar" onclick="fcGuardar()">💾 Guardar</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MODAL: Reporte Facturación -->
+  <div class="fc-modal-overlay" id="fcModalFact">
+    <div class="fc-modal" style="max-width:500px">
+      <div class="fc-modal-header"><h3>📊 Reporte de Facturación</h3><button class="fc-modal-close" onclick="fcCerrar('fcModalFact')">&times;</button></div>
+      <div class="fc-modal-body" style="max-height:auto">
+        <p style="font-size:13px;color:#64748b;margin:0 0 16px">Genera un Excel con el detalle de facturación mensual: pendientes, facturados, proyección y totales.</p>
+        
+        <div class="fc-form-grid-3">
+          <div class="fc-form-group">
+            <label>Año</label>
+            <select id="rfAño"></select>
+          </div>
+          <div class="fc-form-group">
+            <label>Mes</label>
+            <select id="rfMes"></select>
+          </div>
+          <div class="fc-form-group">
+            <label id="rfUFLabel">Valor UF ($) — cargando...</label>
+            <input type="number" id="rfUF" value="" step="0.01" placeholder="Cargando...">
+          </div>
+        </div>
+        
+        <div style="margin-top:12px;padding:12px 16px;background:#f8fafc;border-radius:8px;font-size:12px;color:#475569" id="rfInfo">
+          <div style="font-weight:600;color:#1e1b4b;margin-bottom:6px">El reporte incluye:</div>
+          <div>📋 Resumen por tipo (Anticipado / Vencido)</div>
+          <div>⏳ Pendientes de facturar (mes actual)</div>
+          <div>✅ Ya facturados (mes actual)</div>
+          <div>📊 Proyección con descuentos aplicados</div>
+          <div>💰 Totales en UF y Pesos c/IVA</div>
+        </div>
+      </div>
+      <div class="fc-modal-footer">
+        <span id="rfStatus" style="font-size:12px;color:#94a3b8;flex:1"></span>
+        <button class="fc-btn fc-btn-outline" onclick="fcCerrar('fcModalFact')">Cancelar</button>
+        <button class="fc-btn fc-btn-primary" id="rfBtn" onclick="fcDescargarFact()">📥 Descargar Excel</button>
+      </div>
+    </div>
+  </div>
+  
+  <?!= include('ficha_js') ?>
+</body>
+</html>

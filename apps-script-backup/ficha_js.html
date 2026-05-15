@@ -1,0 +1,454 @@
+<script>
+var _fc = { all: [], filtered: [], tab: 'todos', kpis: {}, metricas: {}, alertas: [], sortCol: 'razonSocial', sortAsc: true, editRut: null };
+var _avColors = ['#4f46e5','#7c3aed','#2563eb','#0891b2','#059669','#d97706','#dc2626','#be185d','#6366f1','#0d9488'];
+
+document.addEventListener('DOMContentLoaded', function() { fcCargar(); });
+
+function fcCargar() {
+  fcLoading(true);
+  google.script.run.withSuccessHandler(function(r) {
+    fcLoading(false);
+    if (r.error) { fcToast(r.error, 'err'); return; }
+    _fc.all = r.clientes || [];
+    _fc.kpis = r.kpis || {};
+    _fc.metricas = r.metricas || {};
+    _fc.alertas = r.alertas || [];
+    fcRenderKpis();
+    fcRenderGrowth();
+    fcRenderAlertas();
+    fcApplyTab();
+  }).withFailureHandler(function(e) { fcLoading(false); fcToast(e.message, 'err'); }).getFichaDataUI();
+}
+
+// ── KPIs ──
+function fcRenderKpis() {
+  var k = _fc.kpis, m = _fc.metricas;
+  var items = [
+    { icon: '👥', label: 'Receptores Vigentes', value: k.activos, sub: k.total + ' total · ' + k.inactivos + ' inactivos', bg: '#ede9fe', color: '#7c3aed' },
+    { icon: '📈', label: 'MRR', value: k.mrrUF + ' UF', sub: 'Promedio ' + k.tarifaPromUF + ' UF/cliente', bg: '#d1fae5', color: '#059669' },
+    { icon: '🆕', label: 'Nuevos ' + new Date().getFullYear(), value: m.ingresosAño || 0, sub: 'Bajas: ' + (m.bajasAño || 0) + ' · Neto: ' + ((m.netoCrecimiento > 0 ? '+' : '') + (m.netoCrecimiento || 0)), bg: '#dbeafe', color: '#2563eb' },
+    { icon: '💰', label: 'CxC Pendiente', value: '$' + Math.round(k.totalCxC).toLocaleString('es-CL'), sub: k.churnRate + '% churn rate', bg: k.totalCxC > 0 ? '#fef3c7' : '#d1fae5', color: k.totalCxC > 0 ? '#d97706' : '#059669' }
+  ];
+  var h = '';
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    h += '<div class="fc-kpi"><div class="fc-kpi-icon" style="background:' + it.bg + ';color:' + it.color + '">' + it.icon + '</div>';
+    h += '<div class="fc-kpi-body"><span class="fc-kpi-label">' + it.label + '</span>';
+    h += '<span class="fc-kpi-value">' + it.value + '</span>';
+    h += '<span class="fc-kpi-sub">' + it.sub + '</span></div></div>';
+  }
+  document.getElementById('fcKpis').innerHTML = h;
+}
+
+// ── GROWTH PANEL ──
+function fcRenderGrowth() {
+  var m = _fc.metricas, k = _fc.kpis;
+  if (!m || !m.ingresosPorMes) return;
+  document.getElementById('fcGrowth').style.display = '';
+  
+  // Métricas
+  var mh = '';
+  mh += mr('Receptores vigentes', '<strong style="color:#059669">' + k.activos + '</strong>');
+  mh += mr('Ingresos ' + new Date().getFullYear(), '<strong style="color:#2563eb">' + m.ingresosAño + '</strong>');
+  mh += mr('Bajas ' + new Date().getFullYear(), '<strong style="color:#dc2626">' + m.bajasAño + '</strong>');
+  mh += mr('Crecimiento neto', '<strong style="color:' + (m.netoCrecimiento >= 0 ? '#059669' : '#dc2626') + '">' + (m.netoCrecimiento >= 0 ? '+' : '') + m.netoCrecimiento + '</strong>');
+  mh += mr('Promedio ingreso/mes', '<strong>' + m.promedioIngMes + '</strong>');
+  mh += mr('Descuentos activos', '<strong style="color:#7c3aed">' + k.descuentosActivos + '</strong>');
+  mh += mr('Churn rate', '<strong style="color:' + (k.churnRate > 20 ? '#dc2626' : '#059669') + '">' + k.churnRate + '%</strong>');
+  document.getElementById('fcMetricas').innerHTML = mh;
+  
+  // Chart
+  var data = m.ingresosPorMes;
+  var maxV = 1;
+  for (var i = 0; i < data.length; i++) {
+    if (data[i].ingresos > maxV) maxV = data[i].ingresos;
+    if (data[i].bajas > maxV) maxV = data[i].bajas;
+  }
+  var ch = '';
+  for (var i = 0; i < data.length; i++) {
+    var d = data[i];
+    var hIng = d.ingresos > 0 ? Math.max(d.ingresos / maxV * 100, 8) : 0;
+    var hBaj = d.bajas > 0 ? Math.max(d.bajas / maxV * 100, 8) : 0;
+    ch += '<div class="fc-chart-col">';
+    ch += '<div style="display:flex;gap:1px;align-items:flex-end;width:100%;height:100px">';
+    if (hIng > 0) ch += '<div class="fc-chart-bar" style="flex:1;height:' + hIng + 'px;background:#22c55e" title="' + d.ingresos + ' nuevos"></div>';
+    if (hBaj > 0) ch += '<div class="fc-chart-bar" style="flex:1;height:' + hBaj + 'px;background:#ef4444" title="' + d.bajas + ' bajas"></div>';
+    if (hIng === 0 && hBaj === 0) ch += '<div style="flex:1;height:2px;background:#e2e8f0;border-radius:1px"></div>';
+    ch += '</div>';
+    ch += '<div class="fc-chart-label">' + d.nombre + '</div>';
+    ch += '</div>';
+  }
+  document.getElementById('fcChart').innerHTML = ch;
+}
+
+function mr(label, val) {
+  return '<div class="fc-metric-row"><span>' + label + '</span><span>' + val + '</span></div>';
+}
+
+// ── ALERTAS ──
+function fcRenderAlertas() {
+  var al = _fc.alertas;
+  if (!al || al.length === 0) { document.getElementById('fcAlertas').innerHTML = ''; return; }
+  var icons = { moroso: '🔴', descuento: '🟣' };
+  var h = '<div class="fc-alerts"><div class="fc-alert-title">⚠️ ' + al.length + ' alertas</div>';
+  var max = Math.min(al.length, 5);
+  for (var i = 0; i < max; i++) h += '<div class="fc-alert-item">' + (icons[al[i].tipo]||'⚪') + ' <strong>' + al[i].nombre + '</strong> — ' + al[i].detalle + '</div>';
+  if (al.length > max) h += '<div class="fc-alert-item" style="color:#94a3b8">...y ' + (al.length-max) + ' más</div>';
+  h += '</div>';
+  document.getElementById('fcAlertas').innerHTML = h;
+}
+
+// ── TABS ──
+function fcTab(tab) {
+  _fc.tab = tab;
+  document.querySelectorAll('.fc-tab').forEach(function(t) { t.classList.remove('active'); });
+  var capTab = tab.charAt(0).toUpperCase() + tab.slice(1);
+  var el = document.getElementById('fcTab' + capTab);
+  if (el) el.classList.add('active');
+  fcApplyTab();
+}
+
+function fcApplyTab() {
+  var all = _fc.all;
+  document.getElementById('fcBadgeTodos').textContent = all.length;
+  document.getElementById('fcBadgeActivos').textContent = all.filter(function(c){return c.estado==='Activo'}).length;
+  document.getElementById('fcBadgeInactivos').textContent = all.filter(function(c){return c.estado==='Inactivo'}).length;
+  document.getElementById('fcBadgeDeuda').textContent = all.filter(function(c){return c.saldoCxC>1}).length;
+  
+  if (_fc.tab === 'activos') _fc.filtered = all.filter(function(c){return c.estado==='Activo'});
+  else if (_fc.tab === 'inactivos') _fc.filtered = all.filter(function(c){return c.estado==='Inactivo'});
+  else if (_fc.tab === 'conDeuda') _fc.filtered = all.filter(function(c){return c.saldoCxC>1});
+  else _fc.filtered = all.slice();
+  fcFiltrar();
+}
+
+function fcFiltrar() {
+  var q = (document.getElementById('fcBuscar').value||'').toLowerCase();
+  var list = _fc.filtered;
+  if (q) list = list.filter(function(c) {
+    return c.rut.toLowerCase().indexOf(q)!==-1 || c.razonSocial.toLowerCase().indexOf(q)!==-1 || c.email.toLowerCase().indexOf(q)!==-1;
+  });
+  fcSort(list);
+  fcRenderTabla(list);
+}
+
+function fcOrdenar(col) {
+  if (_fc.sortCol===col) _fc.sortAsc=!_fc.sortAsc; else { _fc.sortCol=col; _fc.sortAsc=true; }
+  fcFiltrar();
+}
+
+function fcSort(list) {
+  var col=_fc.sortCol, asc=_fc.sortAsc;
+  list.sort(function(a,b) {
+    var va=a[col],vb=b[col];
+    if (typeof va==='number'&&typeof vb==='number') return asc?va-vb:vb-va;
+    return asc?String(va||'').localeCompare(String(vb||'')):String(vb||'').localeCompare(String(va||''));
+  });
+}
+
+// ── TABLA ──
+function fcRenderTabla(list) {
+  var h = '';
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    var color = _avColors[Math.abs(hs(c.razonSocial))%_avColors.length];
+    var ini = gI(c.razonSocial);
+    var estBadge = c.estado==='Activo' ? '<span class="fc-badge fc-badge-activo">Activo</span>' : '<span class="fc-badge fc-badge-inactivo">Inactivo</span>';
+    var factBadge = c.facturacionTipo==='Mes Anticipado' ? '<span class="fc-badge fc-badge-anticipado">Anticipado</span>' : '<span class="fc-badge fc-badge-vencido">Vencido</span>';
+    var descBadge = c.descuentoActivo ? ' <span class="fc-badge fc-badge-desc">' + c.descuentoPct + '%</span>' : '';
+    var deudaColor = c.saldoCxC > 0 ? '#dc2626' : '#94a3b8';
+    var opac = c.estado==='Inactivo' ? 'opacity:.55;' : '';
+    
+    h += '<tr style="'+opac+'">';
+    h += '<td><span class="fc-rut" onclick="fcVerDetalle(\''+c.rut+'\')">'+c.rut+'</span></td>';
+    h += '<td><div class="fc-name-cell"><div class="fc-avatar" style="background:'+color+'">'+ini+'</div><div><div class="fc-name-text">'+c.razonSocial+'</div><div class="fc-name-sub">'+c.email+'</div></div></div></td>';
+    h += '<td class="c">'+estBadge+'</td>';
+    h += '<td class="c">'+factBadge+'</td>';
+    h += '<td class="r" style="font-weight:600">'+c.tarifaEfectiva+' UF'+descBadge+'</td>';
+    h += '<td class="c">'+(c.descuentoActivo ? c.descuentoPct+'%' : '—')+'</td>';
+    h += '<td class="r" style="font-weight:700;color:'+deudaColor+'">'+(c.saldoCxC>0?'$'+Math.round(c.saldoCxC).toLocaleString('es-CL'):'—')+'</td>';
+    h += '<td class="c">'+c.mesesCliente+'</td>';
+    h += '<td class="c"><button class="fc-btn-sm" onclick="fcVerDetalle(\''+c.rut+'\')">👁</button> <button class="fc-btn-sm admin-only" onclick="fcEditar(\''+c.rut+'\')">✏️</button></td>';
+    h += '</tr>';
+  }
+  if (!list.length) h = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:40px">Sin clientes</td></tr>';
+  document.getElementById('fcTbody').innerHTML = h;
+  // Re-apply access control for dynamically rendered buttons
+  if (USER_ROLE && !USER_ROLE.esAdmin) aplicarModoConsulta();
+}
+
+// ── DETALLE MODAL (rediseñado) ──
+function fcVerDetalle(rut) {
+  var c = _fc.all.find(function(x){return x.rut===rut});
+  if (!c) return;
+  _fc.editRut = rut;
+  
+  var color = _avColors[Math.abs(hs(c.razonSocial))%_avColors.length];
+  var ini = gI(c.razonSocial);
+  
+  // ── TOP: gradient header con facturación destacada ──
+  var top = '<div class="fc-det-profile"><div class="fc-det-avatar" style="background:'+color+'">'+ini+'</div>';
+  top += '<div class="fc-det-info"><h2>'+c.razonSocial+'</h2>';
+  top += '<p>'+c.rut+' · '+c.email+(c.telefono ? ' · '+c.telefono : '')+'</p>';
+  top += '<div class="fc-det-badges">';
+  top += '<span class="fc-badge '+(c.estado==='Activo'?'fc-badge-activo':'fc-badge-inactivo')+'">'+c.estado+'</span>';
+  // FACTURACIÓN DESTACADA
+  var factClass = c.facturacionTipo==='Mes Anticipado' ? 'fc-det-fact-anticipado' : 'fc-det-fact-vencido';
+  top += '<span class="fc-det-fact-badge '+factClass+'">'+(c.facturacionTipo==='Mes Anticipado'?'📅 MES ANTICIPADO':'📅 MES VENCIDO')+'</span>';
+  if (c.descuentoActivo) top += '<span class="fc-badge fc-badge-desc">🏷️ '+c.descuentoPct+'% hasta '+c.fechaFinDescuento+'</span>';
+  top += '</div></div></div>';
+  document.getElementById('fcDetTop').innerHTML = top;
+  
+  // ── KPIs ──
+  var kh = '';
+  kh += '<div class="fc-det-kpi"><span class="fc-det-kpi-label">Tarifa Base</span><span class="fc-det-kpi-val" style="color:#1e1b4b">'+c.tarifaSuscUF+' UF</span></div>';
+  kh += '<div class="fc-det-kpi"><span class="fc-det-kpi-label">Tarifa Efectiva</span><span class="fc-det-kpi-val" style="color:#059669">'+c.tarifaEfectiva+' UF</span></div>';
+  kh += '<div class="fc-det-kpi"><span class="fc-det-kpi-label">Deuda CxC</span><span class="fc-det-kpi-val" style="color:'+(c.saldoCxC>0?'#dc2626':'#059669')+'">'+(c.saldoCxC>0?'$'+Math.round(c.saldoCxC).toLocaleString('es-CL'):'$0')+'</span></div>';
+  kh += '<div class="fc-det-kpi"><span class="fc-det-kpi-label">Antigüedad</span><span class="fc-det-kpi-val" style="color:#475569">'+c.mesesCliente+' meses</span></div>';
+  document.getElementById('fcDetKpis').innerHTML = kh;
+  
+  // ── BODY: 2 columnas ──
+  var b = '<div class="fc-det-grid">';
+  
+  // Col izquierda: Facturación + Descuento
+  b += '<div>';
+  b += '<div class="fc-det-section"><div class="fc-det-section-title">💰 Facturación</div>';
+  b += dr('Tipo Facturación', '<strong>'+ c.facturacionTipo+'</strong>');
+  b += dr('Tipo Documento', c.tipoDoc);
+  b += dr('Tarifa Capacitación', c.tarifaCapUF + ' UF');
+  b += dr('Pago en Cuotas', c.pagoCuotasCap);
+  b += dr('Factura Cap.', c.fechaFactCap || '—');
+  b += '</div>';
+  if (c.descuentoPct > 0) {
+    b += '<div class="fc-det-section" style="margin-top:16px"><div class="fc-det-section-title">🏷️ Descuento</div>';
+    b += dr('Porcentaje', c.descuentoPct + '%');
+    b += dr('Duración', c.descuentoMeses || '—');
+    b += dr('Estado', c.descuentoActivo ? '<span style="color:#059669;font-weight:700">Vigente hasta '+c.fechaFinDescuento+'</span>' : '<span style="color:#94a3b8">Expirado</span>');
+    b += '</div>';
+  }
+  b += '</div>';
+  
+  // Col derecha: Fechas + Contacto
+  b += '<div>';
+  b += '<div class="fc-det-section"><div class="fc-det-section-title">📅 Timeline</div>';
+  b += dr('Ingreso', c.fechaIngreso || '—');
+  b += dr('Primera Factura', c.fechaPrimeraFactura || '—');
+  b += dr('Capacitación', c.fechaCapacitacion || '—');
+  if (c.estado==='Inactivo') b += dr('Inactividad', '<span style="color:#dc2626">'+c.fechaInactividad+'</span>');
+  b += '</div>';
+  b += '<div class="fc-det-section" style="margin-top:16px"><div class="fc-det-section-title">📍 Contacto</div>';
+  b += dr('Giro', c.giro || '—');
+  b += dr('Dirección', c.direccion || '—');
+  b += '</div>';
+  b += '</div>';
+  
+  b += '</div>'; // close grid
+  
+  // CxC alert
+  if (c.saldoCxC > 0) {
+    b += '<div style="margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:12px 16px">';
+    b += '<div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:6px">⚠️ Deuda Pendiente</div>';
+    b += '<div style="display:flex;gap:24px;font-size:13px">';
+    b += '<span style="color:#64748b">Saldo: <strong style="color:#dc2626">$'+Math.round(c.saldoCxC).toLocaleString('es-CL')+'</strong></span>';
+    b += '<span style="color:#64748b">Docs: <strong>'+c.docsCxC+'</strong></span>';
+    b += '<span style="color:#64748b">Días: <strong style="color:#dc2626">'+c.diasCxC+'d</strong></span>';
+    b += '</div></div>';
+  }
+  
+  // Notas
+  if (c.notas) {
+    b += '<div style="margin-top:16px;background:#f8fafc;border-radius:8px;padding:10px 14px;font-size:13px;color:#475569">';
+    b += '<strong style="color:#1e1b4b">📝 Notas:</strong> ' + c.notas + '</div>';
+  }
+  
+  document.getElementById('fcDetBody').innerHTML = b;
+  document.getElementById('fcDetBtnEstado').textContent = c.estado==='Activo' ? '🔴 Desactivar' : '🟢 Activar';
+  document.getElementById('fcDetBtnEstado').style.borderColor = c.estado==='Activo' ? '#fca5a5' : '#86efac';
+  document.getElementById('fcDetBtnEstado').style.color = c.estado==='Activo' ? '#dc2626' : '#059669';
+  document.getElementById('fcModalDet').classList.add('open');
+}
+
+function dr(l,v) { return '<div class="fc-det-row"><span>'+l+'</span><span>'+v+'</span></div>'; }
+
+// ── CREAR / EDITAR ──
+function fcAbrirNuevo() {
+  _fc.editRut = null;
+  document.getElementById('fcEditTitle').textContent = 'Nuevo Receptor';
+  clrForm();
+  document.getElementById('fRut').disabled = false;
+  document.getElementById('fEstado').value = 'Activo';
+  document.getElementById('fFactTipo').value = 'Mes Vencido';
+  document.getElementById('fTipoDoc').value = 'Factura';
+  document.getElementById('fPagoCuotas').value = 'No';
+  document.getElementById('fcModalEdit').classList.add('open');
+}
+
+function fcEditar(rut) {
+  var c = _fc.all.find(function(x){return x.rut===rut});
+  if (!c) return;
+  _fc.editRut = rut;
+  fcCerrar('fcModalDet');
+  document.getElementById('fcEditTitle').textContent = 'Editar: ' + c.razonSocial;
+  document.getElementById('fRut').value = c.rut; document.getElementById('fRut').disabled = true;
+  document.getElementById('fRazon').value = c.razonSocial;
+  document.getElementById('fEmail').value = c.email;
+  document.getElementById('fTelefono').value = c.telefono;
+  document.getElementById('fGiro').value = c.giro;
+  document.getElementById('fEstado').value = c.estado;
+  document.getElementById('fDireccion').value = c.direccion;
+  document.getElementById('fTarifaSusc').value = c.tarifaSuscUF || '';
+  document.getElementById('fTarifaCap').value = c.tarifaCapUF || '';
+  document.getElementById('fFactTipo').value = c.facturacionTipo || 'Mes Vencido';
+  document.getElementById('fTipoDoc').value = c.tipoDoc || 'Factura';
+  document.getElementById('fPagoCuotas').value = c.pagoCuotasCap || 'No';
+  document.getElementById('fDescPct').value = c.descuentoPct || '';
+  document.getElementById('fDescMeses').value = c.descuentoMeses || '';
+  document.getElementById('fFechaIng').value = toD(c.fechaIngreso);
+  document.getElementById('fFechaPrimFac').value = toD(c.fechaPrimeraFactura);
+  document.getElementById('fFechaCap').value = toD(c.fechaCapacitacion);
+  document.getElementById('fFechaFactCap').value = toD(c.fechaFactCap);
+  document.getElementById('fFechaInact').value = toD(c.fechaInactividad);
+  document.getElementById('fNotas').value = c.notas || '';
+  document.getElementById('fcModalEdit').classList.add('open');
+}
+
+function fcEditarDesdeDetalle() { if (_fc.editRut) fcEditar(_fc.editRut); }
+
+function fcGuardar() {
+  var esNuevo = !_fc.editRut;
+  var datos = {
+    rut: document.getElementById('fRut').value.trim(),
+    razonSocial: document.getElementById('fRazon').value.trim(),
+    email: document.getElementById('fEmail').value.trim(),
+    telefono: document.getElementById('fTelefono').value.trim(),
+    giro: document.getElementById('fGiro').value.trim(),
+    estado: document.getElementById('fEstado').value,
+    direccion: document.getElementById('fDireccion').value.trim(),
+    tarifaSuscUF: document.getElementById('fTarifaSusc').value,
+    tarifaCapUF: document.getElementById('fTarifaCap').value,
+    facturacionTipo: document.getElementById('fFactTipo').value,
+    tipoDoc: document.getElementById('fTipoDoc').value,
+    pagoCuotasCap: document.getElementById('fPagoCuotas').value,
+    descuentoPct: document.getElementById('fDescPct').value,
+    descuentoMeses: document.getElementById('fDescMeses').value,
+    fechaIngreso: document.getElementById('fFechaIng').value,
+    fechaPrimeraFactura: document.getElementById('fFechaPrimFac').value,
+    fechaCapacitacion: document.getElementById('fFechaCap').value,
+    fechaFactCap: document.getElementById('fFechaFactCap').value,
+    fechaInactividad: document.getElementById('fFechaInact').value,
+    notas: document.getElementById('fNotas').value
+  };
+  if (!datos.rut) { fcToast('RUT es requerido','err'); return; }
+  if (!datos.razonSocial) { fcToast('Razón social es requerida','err'); return; }
+  
+  var btn = document.getElementById('fcBtnGuardar');
+  btn.disabled = true; btn.textContent = '⏳ Guardando...';
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false; btn.textContent = '💾 Guardar';
+    if (r.success) { fcToast(r.mensaje,'ok'); fcCerrar('fcModalEdit'); fcCargar(); }
+    else fcToast(r.error,'err');
+  }).withFailureHandler(function(e) {
+    btn.disabled = false; btn.textContent = '💾 Guardar';
+    fcToast(e.message,'err');
+  }).guardarFichaClienteUI(datos, esNuevo);
+}
+
+function fcToggleEstado() {
+  if (!_fc.editRut) return;
+  var c = _fc.all.find(function(x){return x.rut===_fc.editRut});
+  if (!c) return;
+  var nuevo = c.estado==='Activo' ? 'Inactivo' : 'Activo';
+  if (!confirm('¿Cambiar '+c.razonSocial+' a '+nuevo+'?')) return;
+  google.script.run.withSuccessHandler(function(r) {
+    if (r.success) { fcToast(r.mensaje,'ok'); fcCerrar('fcModalDet'); fcCargar(); }
+    else fcToast(r.error,'err');
+  }).cambiarEstadoFichaUI(_fc.editRut, nuevo);
+}
+
+// ── MODALES ──
+function fcCerrar(id) { document.getElementById(id).classList.remove('open'); }
+document.addEventListener('click', function(e) { if (e.target.classList.contains('fc-modal-overlay')) e.target.classList.remove('open'); });
+
+// ── UTILS ──
+function fcLoading(s) { document.getElementById('fcLoading').style.display = s ? '' : 'none'; }
+function fcToast(msg,tipo) {
+  var el = document.createElement('div');
+  el.className = 'fc-toast '+(tipo==='ok'?'fc-toast-ok':tipo==='err'?'fc-toast-err':'');
+  el.textContent = msg; document.body.appendChild(el);
+  setTimeout(function(){el.remove()},3500);
+}
+function clrForm() {
+  ['fRut','fRazon','fEmail','fTelefono','fGiro','fDireccion','fTarifaSusc','fTarifaCap','fDescPct','fDescMeses','fFechaIng','fFechaPrimFac','fFechaCap','fFechaFactCap','fFechaInact','fNotas'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.value='';
+  });
+}
+function toD(str) { if(!str)return''; var p=str.split('-'); if(p.length===3&&p[2].length===4) return p[2]+'-'+p[1]+'-'+p[0]; return str; }
+function hs(s) { var h=0; for(var i=0;i<(s||'').length;i++) h=s.charCodeAt(i)+((h<<5)-h); return h; }
+function gI(n) { if(!n)return'?'; var p=n.trim().split(/\s+/); return p.length>=2?(p[0][0]+p[p.length-1][0]).toUpperCase():p[0].substring(0,2).toUpperCase(); }
+
+// =============================================================================
+// REPORTE FACTURACIÓN
+// =============================================================================
+
+function fcAbrirReporteFact() {
+  var now = new Date();
+  var selAño = document.getElementById('rfAño');
+  var selMes = document.getElementById('rfMes');
+  
+  if (selAño.options.length === 0) {
+    for (var y = now.getFullYear(); y <= now.getFullYear() + 1; y++) {
+      var o = document.createElement('option'); o.value = y; o.textContent = y; selAño.appendChild(o);
+    }
+    var meses = ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    for (var m = 1; m <= 12; m++) {
+      var o = document.createElement('option'); o.value = m; o.textContent = m + ' - ' + meses[m]; selMes.appendChild(o);
+    }
+  }
+  selAño.value = now.getFullYear();
+  selMes.value = now.getMonth() + 1;
+  document.getElementById('rfStatus').textContent = '';
+  document.getElementById('fcModalFact').classList.add('open');
+  
+  // Auto-cargar UF del día
+  document.getElementById('rfUF').value = '';
+  document.getElementById('rfUFLabel').textContent = 'Cargando UF...';
+  google.script.run.withSuccessHandler(function(r) {
+    if (r && r.uf) {
+      document.getElementById('rfUF').value = r.uf;
+      document.getElementById('rfUFLabel').textContent = 'Valor UF hoy ($' + Math.round(r.uf).toLocaleString('es-CL') + ')';
+    } else {
+      document.getElementById('rfUF').value = 38000;
+      document.getElementById('rfUFLabel').textContent = 'Valor UF (error al cargar, ingrese manual)';
+    }
+  }).withFailureHandler(function() {
+    document.getElementById('rfUF').value = 38000;
+    document.getElementById('rfUFLabel').textContent = 'Valor UF (sin conexión, ingrese manual)';
+  }).getValorUFUI();
+}
+
+function fcDescargarFact() {
+  var año = parseInt(document.getElementById('rfAño').value);
+  var mes = parseInt(document.getElementById('rfMes').value);
+  var uf = parseFloat(document.getElementById('rfUF').value) || 38000;
+  
+  var btn = document.getElementById('rfBtn');
+  btn.disabled = true; btn.textContent = '⏳ Generando...';
+  document.getElementById('rfStatus').textContent = 'Calculando tarifas y buscando facturas...';
+  
+  google.script.run.withSuccessHandler(function(r) {
+    btn.disabled = false; btn.textContent = '📥 Descargar Excel';
+    if (r && r.url) {
+      window.open(r.url, '_blank');
+      document.getElementById('rfStatus').innerHTML = '<span style="color:#059669">✅ Excel descargado</span>';
+      if (r.id) {
+        setTimeout(function() { google.script.run.eliminarArchivoTempUI(r.id); }, 5000);
+      }
+    } else {
+      document.getElementById('rfStatus').innerHTML = '<span style="color:#dc2626">❌ ' + (r.error || 'Error') + '</span>';
+    }
+  }).withFailureHandler(function(e) {
+    btn.disabled = false; btn.textContent = '📥 Descargar Excel';
+    document.getElementById('rfStatus').innerHTML = '<span style="color:#dc2626">❌ ' + e.message + '</span>';
+  }).exportarFacturacionExcelUI(año, mes, uf);
+}
+</script>

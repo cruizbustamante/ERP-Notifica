@@ -1,0 +1,884 @@
+<script>
+// =============================================================================
+// CENTRALIZACIÓN JS
+// =============================================================================
+
+var _cent = {
+  año: 2025,
+  vista: 'pendientes',
+  tipo: 'ventas',
+  data: null,
+  mesModal: null,
+  docsModal: [],
+  cuentasCache: {}
+};
+
+// =============================================================================
+// INICIALIZACIÓN
+// =============================================================================
+
+document.addEventListener('DOMContentLoaded', function() { centCargar(); });
+
+function centCargar() {
+  google.script.run
+    .withSuccessHandler(function(data) {
+      if (!data) { centToast('Error al cargar datos', true); return; }
+      _cent.data = data;
+      _cent.año = data.añoActivo || 2025;
+      centRenderAños();
+      centRenderKPIs();
+      centRenderVista();
+    })
+    .withFailureHandler(function(e) { centToast('Error: ' + e.message, true); })
+    .getDataCentralizacionUI(_cent.año);
+}
+
+function centCambiarAño(val) {
+  _cent.año = parseInt(val);
+  centCargar();
+}
+
+// =============================================================================
+// RENDER AÑOS
+// =============================================================================
+
+function centRenderAños() {
+  var sel = document.getElementById('centAño');
+  if (!sel || !_cent.data) return;
+  sel.innerHTML = '';
+  var años = _cent.data.añosDisponibles || [_cent.año];
+  for (var i = 0; i < años.length; i++) {
+    sel.innerHTML += '<option value="' + años[i] + '"' + (años[i] === _cent.año ? ' selected' : '') + '>' + años[i] + '</option>';
+  }
+}
+
+// =============================================================================
+// KPIs
+// =============================================================================
+
+function centRenderKPIs() {
+  if (!_cent.data || !_cent.data.resumen) return;
+  var r = _cent.data.resumen;
+  var cntV = 0, cntC = 0, cntH = 0, cntBV = 0, cntTB = 0, cntTot = 0;
+  
+  if (r.ventas) for (var i = 0; i < r.ventas.porMes.length; i++) cntV += r.ventas.porMes[i].cantPendiente;
+  if (r.compras) for (var i = 0; i < r.compras.porMes.length; i++) cntC += r.compras.porMes[i].cantPendiente;
+  if (r.honorarios) for (var i = 0; i < r.honorarios.porMes.length; i++) cntH += r.honorarios.porMes[i].cantPendiente;
+  if (r.boletas_ventas) for (var i = 0; i < r.boletas_ventas.porMes.length; i++) cntBV += r.boletas_ventas.porMes[i].cantPendiente;
+  if (r.transbank) for (var i = 0; i < r.transbank.porMes.length; i++) cntTB += r.transbank.porMes[i].cantPendiente;
+  cntTot = (_cent.data.historial || []).length;
+  
+  document.getElementById('kpiV').textContent = cntV;
+  document.getElementById('kpiC').textContent = cntC;
+  document.getElementById('kpiH').textContent = cntH;
+  document.getElementById('kpiBV').textContent = cntBV;
+  document.getElementById('kpiTB').textContent = cntTB;
+  document.getElementById('kpiT').textContent = cntTot;
+}
+
+// =============================================================================
+// TABS
+// =============================================================================
+
+function centVista(v) {
+  _cent.vista = v;
+  var btns = document.querySelectorAll('.tab-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].dataset.v === v);
+  document.getElementById('secPendientes').style.display = v === 'pendientes' ? '' : 'none';
+  document.getElementById('secHistorial').style.display = v === 'historial' ? '' : 'none';
+  centRenderVista();
+}
+
+function centTipo(t) {
+  _cent.tipo = t;
+  var btns = document.querySelectorAll('.sub-btn');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].dataset.t === t);
+  centRenderMeses();
+}
+
+function centRenderVista() {
+  if (_cent.vista === 'pendientes') { centRenderSubTabs(); centRenderMeses(); }
+  else centRenderHistorial();
+}
+
+// =============================================================================
+// SUB-TABS CON CONTADORES
+// =============================================================================
+
+function centRenderSubTabs() {
+  if (!_cent.data || !_cent.data.resumen) return;
+  var r = _cent.data.resumen;
+  var cntV = 0, cntC = 0, cntH = 0, cntBV = 0, cntTB = 0;
+  if (r.ventas) for (var i = 0; i < r.ventas.porMes.length; i++) cntV += r.ventas.porMes[i].cantPendiente;
+  if (r.compras) for (var i = 0; i < r.compras.porMes.length; i++) cntC += r.compras.porMes[i].cantPendiente;
+  if (r.honorarios) for (var i = 0; i < r.honorarios.porMes.length; i++) cntH += r.honorarios.porMes[i].cantPendiente;
+  if (r.boletas_ventas) for (var i = 0; i < r.boletas_ventas.porMes.length; i++) cntBV += r.boletas_ventas.porMes[i].cantPendiente;
+  if (r.transbank) for (var i = 0; i < r.transbank.porMes.length; i++) cntTB += r.transbank.porMes[i].cantPendiente;
+  
+  var el = document.getElementById('subTabs');
+  el.innerHTML = '';
+  var tipos = [
+    { key: 'ventas', label: 'Ventas', cnt: cntV },
+    { key: 'compras', label: 'Compras', cnt: cntC },
+    { key: 'honorarios', label: 'Honorarios', cnt: cntH },
+    { key: 'boletas_ventas', label: 'Boletas Venta', cnt: cntBV },
+    { key: 'transbank', label: '💳 Transbank', cnt: cntTB }
+  ];
+  for (var i = 0; i < tipos.length; i++) {
+    var t = tipos[i];
+    var cls = 'sub-btn' + (t.key === _cent.tipo ? ' active' : '');
+    var cntCls = 'sub-count' + (t.cnt === 0 ? ' zero' : '');
+    el.innerHTML += '<button class="' + cls + '" data-t="' + t.key + '" onclick="centTipo(\'' + t.key + '\')">' +
+      t.label + '<span class="' + cntCls + '">' + t.cnt + '</span></button>';
+  }
+}
+
+// =============================================================================
+// MESES PENDIENTES (cards)
+// =============================================================================
+
+function centRenderMeses() {
+  if (!_cent.data || !_cent.data.resumen) return;
+  var resumen = _cent.data.resumen[_cent.tipo];
+  var el = document.getElementById('contentPend');
+  
+  if (!resumen || !resumen.porMes || resumen.porMes.length === 0) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">Sin documentos para ' + _cent.tipo + '</div></div>';
+    return;
+  }
+  
+  var esHon = (_cent.tipo === 'honorarios');
+  var html = '<div class="months-grid">';
+  
+  for (var i = 0; i < resumen.porMes.length; i++) {
+    var m = resumen.porMes[i];
+    var todoCent = m.cantPendiente === 0;
+    var cardCls = 'month-card ' + _cent.tipo + (todoCent ? ' todo-cent' : '');
+    
+    html += '<div class="' + cardCls + '">';
+    html += '<div class="mc-head"><span class="mc-title">' + m.nombreMes + '</span><div class="mc-badges">';
+    if (m.cantPendiente > 0) html += '<span class="badge badge-pend">' + m.cantPendiente + ' pend.</span>';
+    if (m.cantCentralizado > 0) html += '<span class="badge badge-cent">' + m.cantCentralizado + ' cent.</span>';
+    html += '</div></div>';
+    
+    html += '<div class="mc-stats">';
+    if (esHon) {
+      html += '<div class="mc-stat"><div class="mc-stat-val">' + fmtM(m.bruto) + '</div><div class="mc-stat-lbl">Bruto</div></div>';
+      html += '<div class="mc-stat"><div class="mc-stat-val">' + fmtM(m.retencion) + '</div><div class="mc-stat-lbl">Retención</div></div>';
+    } else {
+      html += '<div class="mc-stat"><div class="mc-stat-val">' + fmtM(m.neto) + '</div><div class="mc-stat-lbl">Neto</div></div>';
+      html += '<div class="mc-stat"><div class="mc-stat-val">' + fmtM(m.iva) + '</div><div class="mc-stat-lbl">IVA</div></div>';
+    }
+    html += '</div>';
+    
+    var totalVal = esHon ? m.bruto : m.montoPendiente;
+    html += '<div class="mc-total ' + _cent.tipo + '"><div class="mc-total-val">' + fmtM(totalVal) + '</div></div>';
+    
+    if (m.cantPendiente > 0) {
+      html += '<button class="btn btn-primary" onclick="centAbrirMes(' + m.mes + ')">Centralizar ' + m.cantPendiente + ' docs</button>';
+    } else if (_cent.tipo === 'transbank') {
+      // Transbank: siempre permitir entrada manual
+      var tbLabel = m.cantCentralizado > 0 ? '✏️ Agregar más' : '💳 Ingresar vouchers';
+      html += '<button class="btn btn-primary" style="background:#8b5cf6" onclick="centAbrirMes(' + m.mes + ')">' + tbLabel + '</button>';
+    } else {
+      html += '<button class="btn btn-secondary" style="width:100%;justify-content:center" disabled>✓ Centralizado</button>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// =============================================================================
+// HISTORIAL
+// =============================================================================
+
+function centRenderHistorial() {
+  var el = document.getElementById('contentHist');
+  var hist = _cent.data ? _cent.data.historial : [];
+  
+  if (!hist || hist.length === 0) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📜</div><div class="empty-text">Sin centralizaciones registradas</div></div>';
+    return;
+  }
+  
+  var html = '<table class="hist-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Período</th><th>Comprobante</th><th class="text-right">Docs</th><th class="text-right">Monto</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>';
+  
+  for (var i = 0; i < hist.length; i++) {
+    var h = hist[i];
+    var fechaStr = h.fecha ? new Date(h.fecha).toLocaleDateString('es-CL') : '';
+    var badgeCls = h.estado === 'ACTIVO' ? 'badge-success' : 'badge-danger';
+    
+    html += '<tr><td>' + fechaStr + '</td><td>' + h.tipo + '</td><td>' + h.nombreMes + ' ' + h.año + '</td>'
+      + '<td><code>' + h.comprobante + '</code></td><td class="text-right">' + h.documentos + '</td>'
+      + '<td class="text-right">' + fmtM(h.monto) + '</td>'
+      + '<td><span class="badge ' + badgeCls + '">' + h.estado + '</span></td><td>';
+    if (h.estado === 'ACTIVO') {
+      html += '<button class="btn btn-danger btn-sm admin-only" onclick="centAnular(\'' + h.id + '\')">🔄 Revertir</button>';
+    }
+    html += '</td></tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function centAnular(id) {
+  if (!confirm('¿Revertir esta centralización?\n\n• Se ELIMINARÁ el comprobante y sus movimientos\n• Se desmarcarán los documentos para re-centralizar\n• Se pierde el número de folio')) return;
+  
+  google.script.run
+    .withSuccessHandler(function(r) {
+      if (r && r.success) { centToast(r.mensaje || 'Centralización revertida'); centCargar(); }
+      else centToast(r ? r.error : 'Error', true);
+    })
+    .withFailureHandler(function(e) { centToast(e.message, true); })
+    .anularCentralizacionUI(id);
+}
+
+// =============================================================================
+// MODAL: ABRIR MES
+// =============================================================================
+
+function centAbrirMes(mes) {
+  _cent.mesModal = mes;
+  _cent.docsModal = [];
+  
+  var modal = document.getElementById('centModal');
+  var hdr = document.getElementById('modalTitulo');
+  var body = document.getElementById('modalBody');
+  
+  hdr.textContent = _cent.tipo.charAt(0).toUpperCase() + _cent.tipo.slice(1) + ' — ' + mesNombre(mes) + ' ' + _cent.año;
+  body.innerHTML = '<div class="loading">⏳ Cargando documentos...</div>';
+  modal.classList.add('active');
+  
+  // Transbank: formulario manual en vez de cargar docs de hoja
+  if (_cent.tipo === 'transbank') {
+    _cent.tbLineas = [{ fecha: '', referencia: '', neto: '', iva: '', total: '', rut: '', razonSocial: '' }];
+    centRenderTransbankModal();
+    // Cargar cuentas
+    if (!_cent.cuentasCache['transbank']) {
+      google.script.run.withSuccessHandler(function(ctas) {
+        _cent.cuentasCache['transbank'] = ctas || [];
+        centLlenarCuentas(document.getElementById('selCuenta'));
+      }).getCuentasParaCentralizacionUI('transbank');
+    }
+    return;
+  }
+  
+  // Otros tipos: cargar docs y cuentas en paralelo
+  google.script.run
+    .withSuccessHandler(function(result) {
+      _cent.docsModal = result.docs || [];
+      centRenderModal();
+    })
+    .withFailureHandler(function(e) { body.innerHTML = '<div class="empty">Error: ' + e.message + '</div>'; })
+    .getDocumentosCentralizarUI(_cent.tipo, _cent.año, mes);
+  
+  // Cargar cuentas si no están en caché
+  if (!_cent.cuentasCache[_cent.tipo]) {
+    google.script.run
+      .withSuccessHandler(function(ctas) {
+        _cent.cuentasCache[_cent.tipo] = ctas || [];
+        centLlenarCuentas(document.getElementById('selCuenta'));
+      })
+      .getCuentasParaCentralizacionUI(_cent.tipo);
+  }
+}
+
+// =============================================================================
+// TRANSBANK: FORMULARIO MANUAL
+// =============================================================================
+
+function centRenderTransbankModal() {
+  var body = document.getElementById('modalBody');
+  var lineas = _cent.tbLineas || [];
+  var ultimoDia = new Date(_cent.año, _cent.mesModal, 0).getDate();
+  var fechaDefault = _cent.año + '-' + ('0' + _cent.mesModal).slice(-2) + '-' + ultimoDia;
+  
+  var html = '<div style="margin-bottom:12px">';
+  html += '<label style="font-weight:600;font-size:13px">Cuenta Ventas:</label> ';
+  html += '<select id="selCuenta" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;min-width:250px">';
+  html += '<option value="">Cargando...</option></select>';
+  html += '</div>';
+  
+  html += '<table class="docs-tbl" style="width:100%"><thead><tr>';
+  html += '<th style="width:120px">Fecha</th>';
+  html += '<th style="min-width:200px">Auxiliar (receptor)</th>';
+  html += '<th style="width:140px">Referencia</th>';
+  html += '<th style="width:110px;text-align:right">Neto</th>';
+  html += '<th style="width:90px;text-align:right">IVA</th>';
+  html += '<th style="width:110px;text-align:right">Total</th>';
+  html += '<th style="width:30px"></th></tr></thead><tbody>';
+  
+  for (var i = 0; i < lineas.length; i++) {
+    var ln = lineas[i];
+    var auxDisplay = ln.rut ? (ln.rut + ' - ' + (ln.razonSocial || '')) : '';
+    html += '<tr>';
+    html += '<td><input type="date" class="tb-fecha" value="' + (ln.fecha || fechaDefault) + '" style="padding:3px 4px;border:1px solid #cbd5e1;border-radius:4px;width:100%;font-size:12px"></td>';
+    // Auxiliar con autocomplete
+    html += '<td style="position:relative">';
+    html += '<input type="text" class="tb-aux" data-idx="' + i + '" value="' + auxDisplay + '" placeholder="Buscar RUT o nombre..." ';
+    html += 'oninput="centTBBuscarAux(this,' + i + ')" onfocus="centTBBuscarAux(this,' + i + ')" ';
+    html += 'style="padding:3px 6px;border:1px solid ' + (ln.rut ? '#86efac' : '#cbd5e1') + ';border-radius:4px;width:100%;font-size:12px;background:' + (ln.rut ? '#f0fdf4' : '#fff') + '">';
+    html += '<div class="tb-aux-dd" id="tbAuxDD' + i + '" style="display:none;position:absolute;z-index:100;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.15);max-height:180px;overflow-y:auto;width:100%;left:0;top:100%"></div>';
+    html += '</td>';
+    html += '<td><input type="text" class="tb-ref" value="' + (ln.referencia || '') + '" placeholder="N° voucher" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;width:100%;font-size:12px"></td>';
+    html += '<td><input type="number" class="tb-neto" value="' + (ln.neto || '') + '" placeholder="0" onchange="centTBCalcIVA(' + i + ')" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;width:100%;text-align:right;font-size:12px"></td>';
+    html += '<td><input type="number" class="tb-iva" value="' + (ln.iva || '') + '" placeholder="0" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;width:100%;text-align:right;font-size:12px;background:#f8fafc"></td>';
+    html += '<td><input type="number" class="tb-total" value="' + (ln.total || '') + '" placeholder="0" style="padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;width:100%;text-align:right;font-size:12px;background:#f8fafc"></td>';
+    html += '<td><button onclick="centTBRemove(' + i + ')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px">🗑</button></td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  
+  html += '<div style="margin-top:10px;display:flex;gap:8px;align-items:center">';
+  html += '<button onclick="centTBAdd()" style="padding:6px 14px;background:#8b5cf6;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">➕ Agregar línea</button>';
+  html += '<span style="margin-left:auto;font-weight:600;font-size:14px" id="tbTotales"></span>';
+  html += '</div>';
+  
+  html += '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:right">';
+  html += '<button onclick="centTBCentralizar()" style="padding:10px 24px;background:#1a1a4e;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px">💳 Centralizar Transbank</button>';
+  html += '</div>';
+  
+  body.innerHTML = html;
+  
+  if (_cent.cuentasCache['transbank']) {
+    centLlenarCuentas(document.getElementById('selCuenta'));
+  }
+  centTBTotales();
+  
+  // Close dropdowns on outside click
+  document.addEventListener('click', function(e) {
+    if (!e.target.classList.contains('tb-aux')) {
+      var dds = document.querySelectorAll('.tb-aux-dd');
+      for (var d = 0; d < dds.length; d++) dds[d].style.display = 'none';
+    }
+  });
+}
+
+var _tbAuxTimer = null;
+
+function centTBBuscarAux(input, idx) {
+  var texto = input.value.trim();
+  var dd = document.getElementById('tbAuxDD' + idx);
+  
+  // Si el usuario borró el campo, limpiar auxiliar
+  if (!texto) {
+    _cent.tbLineas[idx].rut = '';
+    _cent.tbLineas[idx].razonSocial = '';
+    input.style.borderColor = '#cbd5e1';
+    input.style.background = '#fff';
+    dd.style.display = 'none';
+    return;
+  }
+  
+  // Debounce
+  clearTimeout(_tbAuxTimer);
+  _tbAuxTimer = setTimeout(function() {
+    google.script.run
+      .withSuccessHandler(function(resultados) {
+        if (!resultados || resultados.length === 0) {
+          dd.innerHTML = '<div style="padding:8px 12px;color:#94a3b8;font-size:12px">Sin resultados — puede ingresar RUT manualmente</div>';
+          dd.style.display = 'block';
+          return;
+        }
+        var html = '';
+        for (var i = 0; i < resultados.length; i++) {
+          var a = resultados[i];
+          html += '<div onclick="centTBSelAux(' + idx + ',\'' + (a.rut || a.rutFormateado || '').replace(/'/g, "\\'") + '\',\'' + (a.nombre || '').replace(/'/g, "\\'") + '\')" ';
+          html += 'style="padding:6px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f1f5f9;transition:background .1s" ';
+          html += 'onmouseover="this.style.background=\'#f0f4ff\'" onmouseout="this.style.background=\'#fff\'">';
+          html += '<strong>' + (a.rutFormateado || a.rut || '') + '</strong> — ' + (a.nombre || '');
+          html += '</div>';
+        }
+        dd.innerHTML = html;
+        dd.style.display = 'block';
+      })
+      .buscarAuxiliaresUI(texto);
+  }, 300);
+}
+
+function centTBSelAux(idx, rut, nombre) {
+  _cent.tbLineas[idx].rut = rut;
+  _cent.tbLineas[idx].razonSocial = nombre;
+  
+  var inputs = document.querySelectorAll('.tb-aux');
+  if (inputs[idx]) {
+    inputs[idx].value = rut + ' - ' + nombre;
+    inputs[idx].style.borderColor = '#86efac';
+    inputs[idx].style.background = '#f0fdf4';
+  }
+  
+  var dd = document.getElementById('tbAuxDD' + idx);
+  if (dd) dd.style.display = 'none';
+}
+
+function centTBAdd() {
+  var ultimoDia = new Date(_cent.año, _cent.mesModal, 0).getDate();
+  _cent.tbLineas.push({
+    fecha: _cent.año + '-' + ('0' + _cent.mesModal).slice(-2) + '-' + ultimoDia,
+    referencia: '', neto: '', iva: '', total: '',
+    rut: '', razonSocial: ''
+  });
+  centRenderTransbankModal();
+}
+
+function centTBRemove(idx) {
+  // Sync all lines from DOM before removing
+  var fechas = document.querySelectorAll('.tb-fecha');
+  var refs = document.querySelectorAll('.tb-ref');
+  var netos = document.querySelectorAll('.tb-neto');
+  var ivas = document.querySelectorAll('.tb-iva');
+  var totales = document.querySelectorAll('.tb-total');
+  for (var i = 0; i < fechas.length; i++) {
+    if (_cent.tbLineas[i]) {
+      _cent.tbLineas[i].fecha = fechas[i].value;
+      _cent.tbLineas[i].referencia = refs[i].value;
+      _cent.tbLineas[i].neto = netos[i].value;
+      _cent.tbLineas[i].iva = ivas[i].value;
+      _cent.tbLineas[i].total = totales[i].value;
+    }
+  }
+  _cent.tbLineas.splice(idx, 1);
+  if (_cent.tbLineas.length === 0) centTBAdd();
+  else centRenderTransbankModal();
+}
+
+function centTBUpdate(idx) {
+  var fechas = document.querySelectorAll('.tb-fecha');
+  var refs = document.querySelectorAll('.tb-ref');
+  var netos = document.querySelectorAll('.tb-neto');
+  var ivas = document.querySelectorAll('.tb-iva');
+  var totales = document.querySelectorAll('.tb-total');
+  
+  if (_cent.tbLineas[idx]) {
+    _cent.tbLineas[idx].fecha = fechas[idx].value;
+    _cent.tbLineas[idx].referencia = refs[idx].value;
+    _cent.tbLineas[idx].neto = netos[idx].value;
+    _cent.tbLineas[idx].iva = ivas[idx].value;
+    _cent.tbLineas[idx].total = totales[idx].value;
+    // rut/razonSocial preserved from centTBSelAux
+  }
+  centTBTotales();
+}
+
+function centTBCalcIVA(idx) {
+  var netos = document.querySelectorAll('.tb-neto');
+  var ivas = document.querySelectorAll('.tb-iva');
+  var totales = document.querySelectorAll('.tb-total');
+  
+  var neto = Math.round(parseFloat(netos[idx].value) || 0);
+  var iva = Math.round(neto * 0.19);
+  ivas[idx].value = iva;
+  totales[idx].value = neto + iva;
+  
+  if (_cent.tbLineas[idx]) {
+    _cent.tbLineas[idx].neto = neto;
+    _cent.tbLineas[idx].iva = iva;
+    _cent.tbLineas[idx].total = neto + iva;
+  }
+  centTBTotales();
+}
+
+function centTBTotales() {
+  var netos = document.querySelectorAll('.tb-neto');
+  var ivas = document.querySelectorAll('.tb-iva');
+  var totales = document.querySelectorAll('.tb-total');
+  var sumN = 0, sumI = 0, sumT = 0;
+  for (var i = 0; i < netos.length; i++) {
+    sumN += parseFloat(netos[i].value) || 0;
+    sumI += parseFloat(ivas[i].value) || 0;
+    sumT += parseFloat(totales[i].value) || 0;
+  }
+  var el = document.getElementById('tbTotales');
+  if (el) el.innerHTML = 'Neto: ' + fmtM(sumN) + ' | IVA: ' + fmtM(sumI) + ' | <strong>Total: ' + fmtM(sumT) + '</strong>';
+}
+
+function centTBCentralizar() {
+  var sel = document.getElementById('selCuenta');
+  var cuentaVentas = sel ? sel.value : '';
+  if (!cuentaVentas) { centToast('Seleccione cuenta de ventas', true); return; }
+  
+  // Sync all lines from DOM + auxiliar from state
+  var fechas = document.querySelectorAll('.tb-fecha');
+  var refs = document.querySelectorAll('.tb-ref');
+  var netos = document.querySelectorAll('.tb-neto');
+  var ivas = document.querySelectorAll('.tb-iva');
+  var totales = document.querySelectorAll('.tb-total');
+  
+  var lineas = [];
+  var sinAux = [];
+  for (var i = 0; i < fechas.length; i++) {
+    var total = parseFloat(totales[i].value) || 0;
+    if (total > 0) {
+      var rut = (_cent.tbLineas[i] && _cent.tbLineas[i].rut) || '';
+      var razon = (_cent.tbLineas[i] && _cent.tbLineas[i].razonSocial) || '';
+      if (!rut) sinAux.push(i + 1);
+      lineas.push({
+        fecha: fechas[i].value,
+        referencia: refs[i].value,
+        neto: parseFloat(netos[i].value) || 0,
+        iva: parseFloat(ivas[i].value) || 0,
+        total: total,
+        rut: rut,
+        razonSocial: razon
+      });
+    }
+  }
+  if (lineas.length === 0) { centToast('No hay líneas con monto', true); return; }
+  if (sinAux.length > 0) { centToast('Falta auxiliar en línea(s): ' + sinAux.join(', '), true); return; }
+  
+  var totalM = lineas.reduce(function(s, l) { return s + l.total; }, 0);
+  if (!confirm('¿Centralizar ' + lineas.length + ' voucher(s) Transbank por ' + fmtM(totalM) + '?')) return;
+  
+  centToast('Centralizando Transbank...');
+  
+  google.script.run
+    .withSuccessHandler(function(r) {
+      if (r && r.success) {
+        centToast('✅ Transbank centralizado — Comp: ' + r.comprobante);
+        centCerrarModal();
+        centCargar();
+      } else {
+        centToast(r ? r.error : 'Error', true);
+      }
+    })
+    .withFailureHandler(function(e) { centToast(e.message, true); })
+    .centralizarTransbankUI(_cent.año, _cent.mesModal, lineas, cuentaVentas);
+}
+
+function centCerrarModal() {
+  document.getElementById('centModal').classList.remove('active');
+}
+
+// =============================================================================
+// MODAL: RENDER DOCUMENTOS
+// =============================================================================
+
+function centRenderModal() {
+  var docs = _cent.docsModal;
+  var body = document.getElementById('modalBody');
+  var esHon = _cent.tipo === 'honorarios';
+  var esCompras = _cent.tipo === 'compras';
+  
+  if (!docs || docs.length === 0) {
+    body.innerHTML = '<div class="empty"><div class="empty-icon">✅</div><div class="empty-text">Sin documentos pendientes</div></div>';
+    return;
+  }
+  
+  var html = '';
+  var ctas = _cent.cuentasCache[_cent.tipo] || [];
+  
+  // Selector de cuenta global
+  var labelCuenta = esHon ? 'Cuenta Honorarios' : 
+    (_cent.tipo === 'ventas' || _cent.tipo === 'boletas_ventas') ? 'Cuenta Ventas' : 'Cuenta Gastos (por defecto)';
+  html += '<div class="form-group"><label>' + labelCuenta + '</label><select id="selCuenta" class="form-control"' +
+    (esCompras ? ' onchange="centGlobalCuentaChange(this.value)"' : '') + '>';
+  for (var i = 0; i < ctas.length; i++) {
+    html += '<option value="' + ctas[i].codigo + '">' + ctas[i].codigo + ' - ' + ctas[i].nombre + '</option>';
+  }
+  html += '</select></div>';
+  
+  // Tabla documentos
+  html += '<table class="docs-tbl"><thead><tr>';
+  html += '<th class="chk-cell"><input type="checkbox" id="chkAll" onchange="centToggleAll()" checked></th>';
+  
+  if (esHon) {
+    html += '<th>N°</th><th>Fecha</th><th>RUT</th><th>Nombre</th><th class="text-right">Bruto</th><th class="text-right">Retención</th><th class="text-right">Líquido</th>';
+  } else {
+    html += '<th>Tipo</th><th>Folio</th><th>Fecha</th><th>RUT</th><th>Razón Social</th><th class="text-right">Neto</th><th class="text-right">IVA</th><th class="text-right">Total</th>';
+    html += '<th class="text-center">Ref → Folio</th>';
+    if (esCompras) html += '<th style="min-width:160px">Cuenta Gasto</th>';
+  }
+  html += '</tr></thead><tbody>';
+  
+  var totN = 0, totI = 0, totT = 0, totB = 0, totR = 0, totL = 0;
+  
+  // Pre-build opciones de cuentas para selects por fila
+  var ctaOpts = '';
+  if (esCompras) {
+    for (var c = 0; c < ctas.length; c++) {
+      ctaOpts += '<option value="' + ctas[c].codigo + '">' + ctas[c].codigo + ' - ' + trunc(ctas[c].nombre, 20) + '</option>';
+    }
+  }
+  
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    var rowCls = d.esNC ? ' class="row-nc"' : (d.esND ? ' class="row-nd"' : '');
+    
+    html += '<tr' + rowCls + '>';
+    html += '<td class="chk-cell"><input type="checkbox" class="chkDoc" data-idx="' + i + '" checked></td>';
+    
+    if (esHon) {
+      html += '<td>' + d.folio + '</td><td>' + d.fecha + '</td><td><code>' + d.rut + '</code></td><td>' + trunc(d.razonSocial, 25) + '</td>';
+      html += '<td class="text-right">' + fmtM(d.bruto) + '</td><td class="text-right">' + fmtM(d.retencion) + '</td><td class="text-right">' + fmtM(d.liquido) + '</td>';
+      totB += d.bruto; totR += d.retencion; totL += d.liquido;
+    } else {
+      var tipoBadge = d.esNC ? '<span class="badge badge-nc">NC</span>' : (d.esND ? '<span class="badge badge-warning">ND</span>' : d.tipo);
+      var signo = d.esNC ? -1 : 1;
+      
+      html += '<td>' + tipoBadge + '</td><td>' + d.folio + '</td><td>' + d.fecha + '</td><td><code>' + d.rut + '</code></td><td>' + trunc(d.razonSocial, 22) + '</td>';
+      html += '<td class="text-right">' + fmtM(d.neto * signo) + '</td><td class="text-right">' + fmtM(d.iva * signo) + '</td><td class="text-right">' + fmtM(d.total * signo) + '</td>';
+      
+      // Columna REF: editable para NC/ND — tipo + folio
+      if (d.esNC || d.esND) {
+        var refVal = d.refFolioOriginal || '';
+        var refTipoVal = d.refTipoOriginal || '';
+        var emptyCls = refVal ? '' : ' empty';
+        html += '<td class="text-center" style="white-space:nowrap">';
+        html += '<select class="ref-tipo-sel" data-idx="' + i + '" onchange="centActRefTipo(' + i + ', this.value)" '
+          + 'style="font-size:11px;padding:1px 2px;width:52px;height:22px;vertical-align:middle;margin-right:2px">'
+          + '<option value="FAC"' + (refTipoVal === 'FAC' || !refTipoVal ? ' selected' : '') + '>FAC</option>'
+          + '<option value="NC"' + (refTipoVal === 'NC' ? ' selected' : '') + '>NC</option>'
+          + '<option value="ND"' + (refTipoVal === 'ND' ? ' selected' : '') + '>ND</option>'
+          + '</select>';
+        html += '<input type="text" class="ref-input' + emptyCls + '" data-idx="' + i + '" value="' + refVal + '" '
+          + 'placeholder="Folio" onchange="centActRef(' + i + ', this.value)" '
+          + 'title="Folio del documento que anula/modifica" style="width:60px">';
+        html += '</td>';
+      } else {
+        html += '<td class="text-center"><span style="color:#94a3b8">—</span></td>';
+      }
+      
+      // Columna cuenta gasto por fila (solo compras)
+      if (esCompras) {
+        var ctaDefault = d.cuentaGasto || '';
+        var hasCustom = ctaDefault ? true : false;
+        html += '<td><select class="form-control cta-row-sel" data-idx="' + i + '" data-custom="' + (hasCustom ? '1' : '0') + '" '
+          + 'onchange="centActCtaRow(' + i + ', this.value)" style="font-size:11px;padding:2px 4px;height:auto">'
+          + ctaOpts + '</select>';
+        if (hasCustom) html += '<span class="cta-param-badge" title="Cuenta parametrizada en Auxiliar">★</span>';
+        html += '</td>';
+      }
+      
+      totN += d.neto * signo; totI += d.iva * signo; totT += d.total * signo;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  
+  // Resumen
+  html += '<div class="sum-box">';
+  if (esHon) {
+    html += '<div class="sum-row"><span>Total Bruto:</span><span>' + fmtM(totB) + '</span></div>';
+    html += '<div class="sum-row"><span>Total Retención:</span><span>' + fmtM(totR) + '</span></div>';
+    html += '<div class="sum-row total"><span>Total Líquido:</span><span>' + fmtM(totL) + '</span></div>';
+  } else {
+    html += '<div class="sum-row"><span>Total Neto:</span><span>' + fmtM(totN) + '</span></div>';
+    html += '<div class="sum-row"><span>Total IVA:</span><span>' + fmtM(totI) + '</span></div>';
+    html += '<div class="sum-row total"><span>TOTAL:</span><span>' + fmtM(totT) + '</span></div>';
+  }
+  html += '</div>';
+  
+  // Info NC/ND
+  var ncCount = 0;
+  for (var i = 0; i < docs.length; i++) { if (docs[i].esNC || docs[i].esND) ncCount++; }
+  if (ncCount > 0 && !esHon) {
+    html += '<div style="margin-top:12px;padding:12px;background:#fef3c7;border-radius:8px;font-size:13px;color:#92400e">';
+    html += '⚠️ <strong>' + ncCount + ' Notas de Crédito/Débito</strong> detectadas. ';
+    html += 'Ingrese el <strong>folio de la factura original</strong> en la columna "Ref → Folio" para que se genere correctamente la REBAJA en el documento referenciado.';
+    html += '</div>';
+  }
+  
+  body.innerHTML = html;
+  
+  // Llenar cuentas si ya están en caché
+  if (_cent.cuentasCache[_cent.tipo]) {
+    centLlenarCuentas(document.getElementById('selCuenta'));
+  }
+  
+  // Pre-seleccionar cuentas por fila (compras)
+  if (esCompras) {
+    var globalVal = document.getElementById('selCuenta') ? document.getElementById('selCuenta').value : '';
+    var rowSels = document.querySelectorAll('.cta-row-sel');
+    for (var r = 0; r < rowSels.length; r++) {
+      var idx = parseInt(rowSels[r].dataset.idx);
+      var doc = _cent.docsModal[idx];
+      // Si el auxiliar tiene cuenta parametrizada → usarla, sino → global
+      var val = doc.cuentaGasto || globalVal;
+      rowSels[r].value = val;
+      doc._ctaOverride = val;
+    }
+  }
+  
+  // Actualizar contador footer
+  centActFooter();
+}
+
+function centLlenarCuentas(sel) {
+  var ctas = _cent.cuentasCache[_cent.tipo] || [];
+  var optsHtml = '';
+  for (var i = 0; i < ctas.length; i++) {
+    optsHtml += '<option value="' + ctas[i].codigo + '">' + ctas[i].codigo + ' - ' + ctas[i].nombre + '</option>';
+  }
+  
+  // Llenar selector global
+  if (sel) sel.innerHTML = optsHtml;
+  
+  // Llenar selectores por fila (compras)
+  var rowSels = document.querySelectorAll('.cta-row-sel');
+  if (rowSels.length > 0) {
+    var globalVal = sel ? sel.value : (ctas.length > 0 ? ctas[0].codigo : '');
+    for (var r = 0; r < rowSels.length; r++) {
+      rowSels[r].innerHTML = optsHtml;
+      var idx = parseInt(rowSels[r].dataset.idx);
+      var doc = _cent.docsModal[idx];
+      // Pre-seleccionar: cuenta parametrizada del auxiliar > cuenta global
+      var val = (doc && doc.cuentaGasto) ? doc.cuentaGasto : globalVal;
+      rowSels[r].value = val;
+      if (doc) doc._ctaOverride = val;
+    }
+  }
+}
+
+// =============================================================================
+// MODAL: INTERACCIONES
+// =============================================================================
+
+function centToggleAll() {
+  var all = document.getElementById('chkAll').checked;
+  var chks = document.querySelectorAll('.chkDoc');
+  for (var i = 0; i < chks.length; i++) chks[i].checked = all;
+  centActFooter();
+}
+
+function centActRef(idx, valor) {
+  if (_cent.docsModal[idx]) {
+    _cent.docsModal[idx].refFolioOriginal = valor.trim();
+    // Si tenemos folio pero no tipo, tomar del selector
+    if (valor.trim() && !_cent.docsModal[idx].refTipoOriginal) {
+      var sel = document.querySelector('.ref-tipo-sel[data-idx="' + idx + '"]');
+      _cent.docsModal[idx].refTipoOriginal = sel ? sel.value : '';
+    }
+    if (!valor.trim()) {
+      _cent.docsModal[idx].refTipoOriginal = '';
+    }
+  }
+  // Visual feedback
+  var inputs = document.querySelectorAll('.ref-input[data-idx="' + idx + '"]');
+  for (var i = 0; i < inputs.length; i++) {
+    inputs[i].classList.toggle('empty', !valor.trim());
+  }
+}
+
+function centActRefTipo(idx, valor) {
+  if (_cent.docsModal[idx]) {
+    _cent.docsModal[idx].refTipoOriginal = valor;
+  }
+}
+
+function centGlobalCuentaChange(val) {
+  // Cambiar global → actualizar filas que no tienen cuenta parametrizada del auxiliar
+  var rowSels = document.querySelectorAll('.cta-row-sel');
+  for (var i = 0; i < rowSels.length; i++) {
+    if (rowSels[i].dataset.custom !== '1') {
+      rowSels[i].value = val;
+      var idx = parseInt(rowSels[i].dataset.idx);
+      if (_cent.docsModal[idx]) _cent.docsModal[idx]._ctaOverride = val;
+    }
+  }
+}
+
+function centActCtaRow(idx, val) {
+  if (_cent.docsModal[idx]) _cent.docsModal[idx]._ctaOverride = val;
+}
+
+function centActFooter() {
+  var chks = document.querySelectorAll('.chkDoc:checked');
+  var el = document.getElementById('modalFooterInfo');
+  if (el) el.textContent = chks.length + ' documento(s) seleccionado(s)';
+}
+
+// =============================================================================
+// EJECUTAR CENTRALIZACIÓN
+// =============================================================================
+
+function centEjecutar() {
+  var selCuenta = document.getElementById('selCuenta');
+  if (!selCuenta || !selCuenta.value) { centToast('Seleccione cuenta contable', true); return; }
+  
+  var chks = document.querySelectorAll('.chkDoc:checked');
+  if (chks.length === 0) { centToast('Seleccione al menos un documento', true); return; }
+  
+  var esCompras = _cent.tipo === 'compras';
+  
+  // Recopilar docs seleccionados con sus refs y cuentas
+  var docsSeleccionados = [];
+  for (var i = 0; i < chks.length; i++) {
+    var idx = parseInt(chks[i].dataset.idx);
+    var doc = _cent.docsModal[idx];
+    var docSel = {
+      rowIndex: doc.rowIndex,
+      refTipoOriginal: doc.refTipoOriginal || '',
+      refFolioOriginal: doc.refFolioOriginal || ''
+    };
+    // Para compras: leer cuenta por fila
+    if (esCompras) {
+      var rowSel = document.querySelector('.cta-row-sel[data-idx="' + idx + '"]');
+      docSel.cuentaGasto = rowSel ? rowSel.value : selCuenta.value;
+    }
+    docsSeleccionados.push(docSel);
+  }
+  
+  // Validar NC/ND sin referencia
+  var sinRef = 0;
+  for (var i = 0; i < chks.length; i++) {
+    var idx = parseInt(chks[i].dataset.idx);
+    var doc = _cent.docsModal[idx];
+    if ((doc.esNC || doc.esND) && !doc.refFolioOriginal) sinRef++;
+  }
+  
+  if (sinRef > 0) {
+    if (!confirm(sinRef + ' nota(s) de crédito/débito no tienen folio de referencia.\nSe crearán como REGISTRO en vez de REBAJA.\n\n¿Continuar?')) return;
+  }
+  
+  var btn = document.getElementById('btnCentralizar');
+  btn.disabled = true;
+  btn.textContent = '⏳ Procesando...';
+  
+  google.script.run
+    .withSuccessHandler(function(r) {
+      btn.disabled = false;
+      btn.textContent = 'Centralizar';
+      
+      if (r && r.success) {
+        var msg = '✅ Comprobante ' + r.comprobante.id + ' creado — ' + r.documentos + ' docs';
+        if (r.warnings && r.warnings.length > 0) msg += ' (con advertencias)';
+        centToast(msg);
+        centCerrarModal();
+        centCargar();
+      } else {
+        centToast(r ? r.error : 'Error desconocido', true);
+      }
+    })
+    .withFailureHandler(function(e) {
+      btn.disabled = false;
+      btn.textContent = 'Centralizar';
+      centToast('Error: ' + e.message, true);
+    })
+    .centralizarDocumentosUI(_cent.tipo, _cent.año, _cent.mesModal, selCuenta.value, { docsSeleccionados: docsSeleccionados });
+}
+
+// =============================================================================
+// UTILIDADES
+// =============================================================================
+
+function fmtM(n) {
+  if (!n && n !== 0) return '$0';
+  var abs = Math.abs(Math.round(n));
+  var str = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return (n < 0 ? '-$' : '$') + str;
+}
+
+function trunc(s, l) { return !s ? '' : (s.length > l ? s.substring(0, l) + '…' : s); }
+
+function mesNombre(m) {
+  return ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][m] || '';
+}
+
+function centToast(msg, err) {
+  var el = document.getElementById('centToast');
+  el.textContent = msg;
+  el.className = 'toast-msg show ' + (err ? 'err' : 'ok');
+  setTimeout(function() { el.classList.remove('show'); }, 4000);
+}
+</script>

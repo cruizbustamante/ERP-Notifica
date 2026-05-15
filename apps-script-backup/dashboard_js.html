@@ -1,0 +1,204 @@
+<script>
+var _db = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+  var sel = document.getElementById('dbAño');
+  var thisYear = new Date().getFullYear();
+  for (var y = thisYear; y >= thisYear - 2; y--) {
+    var opt = document.createElement('option');
+    opt.value = y; opt.textContent = y;
+    sel.appendChild(opt);
+  }
+  dbCargar();
+});
+
+function dbCargar() {
+  var año = parseInt(document.getElementById('dbAño').value);
+  google.script.run.withSuccessHandler(function(r) {
+    _db = r;
+    dbRender(r);
+  }).withFailureHandler(function(e) {
+    alert('Error cargando dashboard: ' + (e.message || e));
+  }).getDashboardDataUI(año);
+}
+
+function dbRender(d) {
+  // Header
+  document.getElementById('dbEmpresa').textContent = d.empresa + ' — Centro de Comando';
+  document.getElementById('dbSubtitulo').textContent = 'Resumen operacional · ' + d.nombreMes + ' ' + d.año;
+  
+  // KPI: Resultado
+  var res = d.resultado.resultadoNeto;
+  var kRes = document.getElementById('kResultado');
+  kRes.textContent = dbFmt(res);
+  kRes.parentElement.parentElement.className = 'db-kpi ' + (res >= 0 ? 'db-kpi-green' : 'db-kpi-red');
+  document.getElementById('kResultadoSub').textContent = 'Ene-' + d.nombreMes + ' ' + d.año;
+  
+  // KPI: Banco
+  document.getElementById('kBanco').textContent = dbFmt(d.banco.saldo);
+  document.getElementById('kBancoSub').textContent = d.banco.nombre;
+  
+  // KPI: CxC
+  document.getElementById('kCxC').textContent = dbFmt(d.cxc.totalPendiente);
+  var morTxt = d.cxc.cantPendientes + ' docs';
+  if (d.cxc.cantMorosos > 0) morTxt += ' · ' + d.cxc.cantMorosos + ' morosos';
+  document.getElementById('kCxCSub').textContent = morTxt;
+  
+  // KPI: CxP
+  document.getElementById('kCxP').textContent = dbFmt(d.cxp.totalPendiente);
+  document.getElementById('kCxPSub').textContent = d.cxp.cantDocs + ' docs pendientes';
+  
+  // Chart: Resultado mensual
+  dbRenderChart(d.resultadoPorMes);
+  
+  // Panel: Conciliación
+  dbRenderConc(d.conciliacion);
+  
+  // Panel: Top Morosos
+  dbRenderMorosos(d.topMorosos);
+  
+  // Panel: Resumen operacional
+  dbRenderResumen(d);
+}
+
+// ── CHART: Resultado por mes ──
+function dbRenderChart(meses) {
+  var wrap = document.getElementById('chartResultado');
+  if (!meses || meses.length === 0) {
+    wrap.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:40px">Sin datos</div>';
+    return;
+  }
+  
+  var maxVal = 1;
+  for (var i = 0; i < meses.length; i++) {
+    if (Math.abs(meses[i].ingresos) > maxVal) maxVal = Math.abs(meses[i].ingresos);
+    if (Math.abs(meses[i].resultado) > maxVal) maxVal = Math.abs(meses[i].resultado);
+  }
+  
+  var h = '<div style="display:flex;gap:12px;margin-bottom:8px;font-size:11px;color:#94a3b8">';
+  h += '<span>🟦 Ingresos</span><span>🟩 Resultado (+) 🟥 Resultado (−)</span></div>';
+  h += '<div class="db-bar-chart">';
+  
+  for (var i = 0; i < meses.length; i++) {
+    var m = meses[i];
+    var hIng = Math.max(Math.abs(m.ingresos) / maxVal * 140, 2);
+    var hRes = Math.max(Math.abs(m.resultado) / maxVal * 140, 2);
+    var resColor = m.resultado >= 0 ? '#22c55e' : '#ef4444';
+    
+    h += '<div class="db-bar-col">';
+    h += '<div class="db-bar-val">' + dbFmtShort(m.ingresos) + '</div>';
+    h += '<div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:150px">';
+    h += '<div class="db-bar" style="flex:1;height:' + hIng + 'px;background:#818cf8"></div>';
+    h += '<div class="db-bar" style="flex:1;height:' + hRes + 'px;background:' + resColor + '"></div>';
+    h += '</div>';
+    h += '<div class="db-bar-label">' + m.nombre.substring(0,3) + '</div>';
+    h += '</div>';
+  }
+  h += '</div>';
+  wrap.innerHTML = h;
+}
+
+// ── PANEL: Conciliación ──
+function dbRenderConc(c) {
+  var el = document.getElementById('panelConc');
+  if (!c || !c.mes) {
+    el.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:30px">Sin datos de cartola</div>';
+    return;
+  }
+  
+  var pct = c.pctAvance;
+  var color = pct >= 90 ? '#22c55e' : pct >= 60 ? '#eab308' : '#ef4444';
+  var badge = pct >= 90 ? 'db-badge-ok' : pct >= 60 ? 'db-badge-warn' : 'db-badge-danger';
+  var statusTxt = pct >= 90 ? 'Al día' : pct >= 60 ? 'En progreso' : 'Atrasado';
+  
+  // SVG ring
+  var radius = 40, circumference = 2 * Math.PI * radius;
+  var offset = circumference - (pct / 100) * circumference;
+  
+  var h = '<div class="db-ring-wrap">';
+  h += '<svg class="db-ring-svg" viewBox="0 0 100 100">';
+  h += '<circle cx="50" cy="50" r="' + radius + '" fill="none" stroke="#f1f5f9" stroke-width="10"/>';
+  h += '<circle cx="50" cy="50" r="' + radius + '" fill="none" stroke="' + color + '" stroke-width="10" ';
+  h += 'stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '" ';
+  h += 'stroke-linecap="round" transform="rotate(-90 50 50)" style="transition:stroke-dashoffset .6s ease"/>';
+  h += '<text x="50" y="50" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="800" fill="#1e1b4b">' + pct + '%</text>';
+  h += '</svg>';
+  
+  h += '<div class="db-ring-info">';
+  h += '<div style="margin-bottom:8px;font-weight:600;color:#1e1b4b">' + c.nombreMes + ' <span class="db-badge ' + badge + '">' + statusTxt + '</span></div>';
+  h += '<div class="db-ring-stat"><span>Total movimientos</span><span>' + c.totalMovs + '</span></div>';
+  h += '<div class="db-ring-stat"><span>Contabilizados</span><span style="color:#059669">' + c.contabilizados + '</span></div>';
+  h += '<div class="db-ring-stat"><span>Pendientes</span><span style="color:' + (c.pendientes > 0 ? '#dc2626' : '#059669') + '">' + c.pendientes + '</span></div>';
+  h += '</div></div>';
+  
+  el.innerHTML = h;
+}
+
+// ── PANEL: Top Morosos ──
+function dbRenderMorosos(morosos) {
+  var el = document.getElementById('panelMorosos');
+  if (!morosos || morosos.length === 0) {
+    el.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:30px">Sin clientes morosos 🎉</div>';
+    return;
+  }
+  
+  var h = '<table class="db-table"><thead><tr>';
+  h += '<th>Cliente</th><th class="r">Deuda</th><th class="c">Docs</th><th class="c">Días</th>';
+  h += '</tr></thead><tbody>';
+  
+  for (var i = 0; i < morosos.length; i++) {
+    var m = morosos[i];
+    var dColor = m.dias > 90 ? '#dc2626' : m.dias > 60 ? '#f97316' : m.dias > 30 ? '#eab308' : '#64748b';
+    h += '<tr>';
+    h += '<td><div style="font-weight:500;color:#1e1b4b">' + m.nombre + '</div><div style="font-size:11px;color:#94a3b8">' + m.rut + '</div></td>';
+    h += '<td class="r" style="font-weight:700;color:#dc2626">' + dbFmt(m.saldo) + '</td>';
+    h += '<td class="c">' + m.docs + '</td>';
+    h += '<td class="c" style="font-weight:700;color:' + dColor + '">' + m.dias + 'd</td>';
+    h += '</tr>';
+  }
+  h += '</tbody></table>';
+  
+  h += '<div style="text-align:right;margin-top:8px"><button onclick="navigateTo(\'clientes\')" style="background:none;border:none;color:#4f46e5;cursor:pointer;font-size:12px;font-weight:600">Ver todos →</button></div>';
+  
+  el.innerHTML = h;
+}
+
+// ── PANEL: Resumen operacional ──
+function dbRenderResumen(d) {
+  var el = document.getElementById('panelResumen');
+  var h = '';
+  
+  var items = [
+    { icon: '📊', label: 'Comprobantes del año', value: d.comprobantes.total, sub: d.comprobantes.mes + ' este mes' },
+    { icon: '📋', label: 'Centralizaciones', value: d.centralizacion.total, sub: 'activas' },
+    { icon: '💰', label: 'Ingresos acumulados', value: dbFmt(d.resultado.ingresos), sub: 'Ene-' + d.nombreMes },
+    { icon: '📉', label: 'Gastos acumulados', value: dbFmt(d.resultado.gastos), sub: 'Ene-' + d.nombreMes }
+  ];
+  
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    h += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;' + (i < items.length-1 ? 'border-bottom:1px solid #f5f6fa' : '') + '">';
+    h += '<div style="display:flex;align-items:center;gap:8px"><span style="font-size:16px">' + it.icon + '</span><span style="font-size:13px;color:#475569">' + it.label + '</span></div>';
+    h += '<div style="text-align:right"><span style="font-size:14px;font-weight:700;color:#1e1b4b">' + it.value + '</span>';
+    if (it.sub) h += '<span style="font-size:11px;color:#94a3b8;margin-left:6px">' + it.sub + '</span>';
+    h += '</div></div>';
+  }
+  
+  el.innerHTML = h;
+}
+
+// ── UTILS ──
+function dbFmt(n) {
+  if (!n && n !== 0) return '$0';
+  var abs = Math.round(Math.abs(n));
+  var fmt = '$' + abs.toLocaleString('es-CL');
+  return n < 0 ? '-' + fmt : fmt;
+}
+
+function dbFmtShort(n) {
+  var abs = Math.abs(n || 0);
+  if (abs >= 1000000) return (n < 0 ? '-' : '') + '$' + (abs / 1000000).toFixed(1) + 'M';
+  if (abs >= 1000) return (n < 0 ? '-' : '') + '$' + Math.round(abs / 1000) + 'K';
+  return dbFmt(n);
+}
+</script>

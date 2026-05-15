@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head><base target="_top"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('sidebar_css') ?>
+  <?!= include('dashboard_css') ?>
+</head>
+<body>
+  <?!= include('sidebar') ?>
+  
+  <div class="main-content">
+    <!-- Header -->
+    <div class="db-header">
+      <div class="db-header-left">
+        <h1 id="dbEmpresa">Centro de Comando</h1>
+        <p id="dbSubtitulo">Resumen operacional al día de hoy</p>
+      </div>
+      <select class="db-año-sel" id="dbAño" onchange="dbCargar()"></select>
+    </div>
+    
+    <!-- KPIs principales -->
+    <section class="db-kpis" id="dbKpis">
+      <div class="db-kpi db-kpi-green" onclick="navigateTo('contabilidad')">
+        <div class="db-kpi-icon">📈</div>
+        <div class="db-kpi-body">
+          <span class="db-kpi-label">Resultado Ejercicio</span>
+          <span class="db-kpi-value" id="kResultado">—</span>
+          <span class="db-kpi-sub" id="kResultadoSub" style="color:#94a3b8"></span>
+        </div>
+      </div>
+      <div class="db-kpi db-kpi-blue" onclick="navigateTo('conciliacion')">
+        <div class="db-kpi-icon">🏦</div>
+        <div class="db-kpi-body">
+          <span class="db-kpi-label">Saldo Banco</span>
+          <span class="db-kpi-value" id="kBanco">—</span>
+          <span class="db-kpi-sub" id="kBancoSub" style="color:#94a3b8"></span>
+        </div>
+      </div>
+      <div class="db-kpi db-kpi-orange" onclick="navigateTo('clientes')">
+        <div class="db-kpi-icon">💰</div>
+        <div class="db-kpi-body">
+          <span class="db-kpi-label">Por Cobrar</span>
+          <span class="db-kpi-value" id="kCxC">—</span>
+          <span class="db-kpi-sub" id="kCxCSub" style="color:#94a3b8"></span>
+        </div>
+      </div>
+      <div class="db-kpi db-kpi-red">
+        <div class="db-kpi-icon">📋</div>
+        <div class="db-kpi-body">
+          <span class="db-kpi-label">Por Pagar</span>
+          <span class="db-kpi-value" id="kCxP">—</span>
+          <span class="db-kpi-sub" id="kCxPSub" style="color:#94a3b8"></span>
+        </div>
+      </div>
+    </section>
+    
+    <!-- Panels Row 1: Resultado mensual + Conciliación -->
+    <div class="db-grid">
+      <div class="db-panel">
+        <div class="db-panel-title"><span>📊</span> Resultado Mensual</div>
+        <div class="db-chart-wrap" id="chartResultado"><div class="db-loading"><div class="db-sp"></div></div></div>
+      </div>
+      <div class="db-panel">
+        <div class="db-panel-title"><span>🏦</span> Conciliación Bancaria</div>
+        <div id="panelConc"><div class="db-loading"><div class="db-sp"></div></div></div>
+      </div>
+    </div>
+    
+    <!-- Panels Row 2: Top Morosos + Acciones rápidas -->
+    <div class="db-grid">
+      <div class="db-panel">
+        <div class="db-panel-title"><span>⚠️</span> Top Clientes Morosos</div>
+        <div id="panelMorosos"><div class="db-loading"><div class="db-sp"></div></div></div>
+      </div>
+      <div class="db-panel">
+        <div class="db-panel-title"><span>⚡</span> Accesos Rápidos</div>
+        <div class="db-actions" style="margin-top:8px">
+          <button class="db-action-btn" onclick="navigateTo('contabilidad')"><span class="db-action-icon">📖</span> Libro Diario</button>
+          <button class="db-action-btn" onclick="navigateTo('conciliacion')"><span class="db-action-icon">🏦</span> Conciliación</button>
+          <button class="db-action-btn" onclick="navigateTo('centralizacion')"><span class="db-action-icon">📋</span> Centralización</button>
+          <button class="db-action-btn" onclick="navigateTo('clientes')"><span class="db-action-icon">👥</span> Clientes CxC</button>
+          <button class="db-action-btn" onclick="navigateTo('cierre')"><span class="db-action-icon">🔒</span> Cierre Anual</button>
+        </div>
+        <!-- Resumen operacional -->
+        <div style="margin-top:20px;border-top:1px solid #f1f5f9;padding-top:16px">
+          <div class="db-panel-title" style="margin-bottom:10px"><span>📌</span> Resumen Operacional</div>
+          <div id="panelResumen"><div class="db-loading" style="padding:20px"><div class="db-sp"></div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <?!= include('dashboard_js') ?>
+</body>
+</html>

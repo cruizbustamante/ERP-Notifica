@@ -1,0 +1,1550 @@
+<script>
+/* ===========================================
+   CONTABILIDAD JS v3 - Notifica Legal ERP
+   Coherente con Contabilidad_v3.gs y Core_Contable_v3.gs
+   =========================================== */
+
+// Estado global
+var datosContabilidad = null;
+var cuentasMovimiento = [];
+var tiposDocumento = [];
+var catFlujoManual = [];
+var comprobanteActual = null;
+var lineaCounterModerno = 0;
+
+// ===========================================
+// INICIALIZACIÓN
+// ===========================================
+
+document.addEventListener('DOMContentLoaded', function() {
+  initTabs();
+  cargarDatos();
+});
+
+function initTabs() {
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      var tabId = this.getAttribute('data-tab');
+      
+      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+      document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+      
+      this.classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+      
+      if (tabId === 'plan-cuentas') cargarPlanCuentas();
+      if (tabId === 'auxiliares') cargarAuxiliares();
+      if (tabId === 'cierre') cargarEstadoCierre();
+    });
+  });
+}
+
+function cargarDatos() {
+  google.script.run
+    .withSuccessHandler(function(data) {
+      datosContabilidad = data;
+      actualizarUI();
+      cargarComprobantes();
+      cargarCuentasParaSelector();
+      cargarTiposDocumento();
+      cargarCategoriasFlujo();
+    })
+    .withFailureHandler(handleError)
+    .getDataContabilidad();
+}
+
+function actualizarUI() {
+  if (!datosContabilidad) return;
+  
+  // Período activo — v3: periodo es un objeto { año, estado }, no array de 12 meses
+  var añoActivo = datosContabilidad.añoActivo;
+  var estadoAño = datosContabilidad.periodo ? datosContabilidad.periodo.estado : 'N/A';
+  document.getElementById('periodoActivo').textContent = 'Año ' + añoActivo + ' (' + estadoAño + ')';
+  
+  // KPIs
+  document.getElementById('kpiTotalComp').textContent = datosContabilidad.resumen.totalComprobantes;
+  document.getElementById('kpiCompMes').textContent = datosContabilidad.resumen.comprobantesEsteMes;
+  document.getElementById('kpiTotalDebe').textContent = formatMoney(datosContabilidad.resumen.totalDebe);
+  document.getElementById('kpiTotalHaber').textContent = formatMoney(datosContabilidad.resumen.totalHaber);
+  
+  // Llenar selector de años
+  var selectAño = document.getElementById('filtroAño');
+  selectAño.innerHTML = '<option value="" selected>Todos</option>';
+  
+  google.script.run
+    .withSuccessHandler(function(años) {
+      for (var i = 0; i < años.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = años[i];
+        opt.textContent = años[i];
+        selectAño.appendChild(opt);
+      }
+    })
+    .getAñosDisponibles();
+}
+
+function cargarCuentasParaSelector() {
+  google.script.run
+    .withSuccessHandler(function(grupos) {
+      cuentasMovimiento = [];
+      var keys = Object.keys(grupos);
+      for (var i = 0; i < keys.length; i++) {
+        var g = grupos[keys[i]];
+        if (g.cuentas) {
+          for (var j = 0; j < g.cuentas.length; j++) {
+            cuentasMovimiento.push(g.cuentas[j]);
+          }
+        }
+      }
+    })
+    .getCuentasParaSelector();
+}
+
+function cargarTiposDocumento() {
+  google.script.run
+    .withSuccessHandler(function(tipos) {
+      tiposDocumento = tipos || [];
+    })
+    .getTiposDocumento(true);
+}
+
+function cargarCategoriasFlujo() {
+  google.script.run
+    .withSuccessHandler(function(cats) {
+      catFlujoManual = cats || [];
+    })
+    .getCategoriasFlujoCashUI();
+}
+
+function buildOptsFlujo() {
+  var html = '<option value="">— Sin categoría —</option>';
+  var tipoActual = '';
+  for (var i = 0; i < catFlujoManual.length; i++) {
+    var cat = catFlujoManual[i];
+    if (cat.tipo !== tipoActual) {
+      if (tipoActual) html += '</optgroup>';
+      html += '<optgroup label="' + cat.tipo + '">';
+      tipoActual = cat.tipo;
+    }
+    html += '<option value="' + cat.codigo + '">' + cat.codigo + ' - ' + cat.nombre + '</option>';
+  }
+  if (tipoActual) html += '</optgroup>';
+  return html;
+}
+
+// ===========================================
+// COMPROBANTES
+// ===========================================
+
+function cargarComprobantes() {
+  var filtros = {
+    año: parseInt(document.getElementById('filtroAño').value) || 0,
+    mes: document.getElementById('filtroMes').value ? parseInt(document.getElementById('filtroMes').value) : null,
+    tipo: document.getElementById('filtroTipo').value || null,
+    incluirAnulados: document.getElementById('filtroEstado').value === 'TODOS' || document.getElementById('filtroEstado').value === 'ANULADO',
+    estado: document.getElementById('filtroEstado').value === 'ANULADO' ? 'ANULADO' : null
+  };
+  
+  document.getElementById('tbodyComprobantes').innerHTML = '<tr><td colspan="9" class="loading">Cargando comprobantes...</td></tr>';
+  
+  google.script.run
+    .withSuccessHandler(function(comprobantes) {
+      renderComprobantes(comprobantes);
+    })
+    .withFailureHandler(function(error) {
+      document.getElementById('tbodyComprobantes').innerHTML = '<tr><td colspan="9" class="error">Error: ' + error.message + '</td></tr>';
+    })
+    .getComprobantes(filtros);
+}
+
+function filtrarComprobantes() {
+  cargarComprobantes();
+}
+
+function renderComprobantes(comprobantes) {
+  var tbody = document.getElementById('tbodyComprobantes');
+  
+  if (!comprobantes || comprobantes.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="loading">No hay comprobantes para mostrar</td></tr>';
+    return;
+  }
+  
+  var html = '';
+  for (var i = 0; i < comprobantes.length; i++) {
+    var c = comprobantes[i];
+    html += '<tr class="' + (c.estado === 'ANULADO' ? 'anulado' : '') + '">'
+      + '<td><code>' + c.id + '</code></td>'
+      + '<td>' + formatDate(c.fecha) + '</td>'
+      + '<td><span class="badge badge-info">' + getTipoNombre(c.tipo) + '</span></td>'
+      + '<td>' + c.numero + '</td>'
+      + '<td>' + truncate(c.glosa, 40) + '</td>'
+      + '<td class="text-right">' + formatMoney(c.totalDebe) + '</td>'
+      + '<td class="text-right">' + formatMoney(c.totalHaber) + '</td>'
+      + '<td><span class="badge ' + (c.estado === 'VIGENTE' ? 'badge-success' : 'badge-danger') + '">' + c.estado + '</span></td>'
+      + '<td><button class="btn-icon" onclick="verComprobante(\'' + c.id + '\')" title="Ver">👁️</button></td>'
+      + '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+function getTipoNombre(tipo) {
+  var nombres = { I: 'Ingreso', E: 'Egreso', T: 'Traspaso', A: 'Apertura', C: 'Cierre' };
+  return nombres[tipo] || tipo;
+}
+
+// ===========================================
+// MODAL NUEVO COMPROBANTE
+// ===========================================
+
+function abrirModalComprobante() {
+  if (cuentasMovimiento.length === 0 || tiposDocumento.length === 0) {
+    showToast('Cargando datos...', 'info');
+    
+    var cuentasOk = false, tiposOk = false;
+    
+    google.script.run
+      .withSuccessHandler(function(grupos) {
+        cuentasMovimiento = [];
+        var keys = Object.keys(grupos);
+        for (var i = 0; i < keys.length; i++) {
+          var g = grupos[keys[i]];
+          if (g.cuentas) {
+            for (var j = 0; j < g.cuentas.length; j++) {
+              cuentasMovimiento.push(g.cuentas[j]);
+            }
+          }
+        }
+        cuentasOk = true;
+        if (tiposOk) abrirModalComprobanteInterno();
+      })
+      .getCuentasParaSelector();
+    
+    google.script.run
+      .withSuccessHandler(function(tipos) {
+        tiposDocumento = tipos || [];
+        tiposOk = true;
+        if (cuentasOk) abrirModalComprobanteInterno();
+      })
+      .getTiposDocumento(true);
+  } else {
+    abrirModalComprobanteInterno();
+  }
+}
+
+function abrirModalComprobanteInterno() {
+  document.getElementById('modalComprobanteTitle').textContent = 'Nuevo Comprobante';
+  document.getElementById('compNumeroPreview').textContent = 'Número: Automático';
+  
+  // Reset tipo
+  document.getElementById('compTipo').value = '';
+  document.querySelectorAll('.comp-tipo-card').forEach(function(card) {
+    card.classList.remove('selected');
+    card.querySelector('input').checked = false;
+  });
+  
+  // Fecha de hoy (dentro del año fiscal activo)
+  var añoActivo = datosContabilidad ? datosContabilidad.añoActivo : new Date().getFullYear();
+  var hoy = new Date();
+  if (hoy.getFullYear() > añoActivo) {
+    hoy = new Date(añoActivo, 11, 31);
+  }
+  document.getElementById('compFecha').value = hoy.toISOString().split('T')[0];
+  document.getElementById('compGlosa').value = '';
+  
+  // Limpiar líneas
+  document.getElementById('lineasContainer').innerHTML = '';
+  lineaCounterModerno = 0;
+  
+  agregarLineaModerna();
+  agregarLineaModerna();
+  
+  actualizarTotalesModerno();
+  initTipoSelector();
+  abrirModal('modalComprobante');
+}
+
+function initTipoSelector() {
+  document.querySelectorAll('.comp-tipo-card').forEach(function(card) {
+    card.onclick = function() {
+      document.querySelectorAll('.comp-tipo-card').forEach(function(c) { c.classList.remove('selected'); });
+      card.classList.add('selected');
+      card.querySelector('input').checked = true;
+      document.getElementById('compTipo').value = card.querySelector('input').value;
+      
+      var tipoNombre = { I: 'Ingreso', E: 'Egreso', T: 'Traspaso' };
+      document.getElementById('compNumeroPreview').textContent =
+        'Tipo: ' + tipoNombre[card.querySelector('input').value] + ' | Número: Automático';
+    };
+  });
+}
+
+function agregarLineaModerna() {
+  lineaCounterModerno++;
+  var container = document.getElementById('lineasContainer');
+  var id = lineaCounterModerno;
+  
+  var empty = container.querySelector('.comp-lineas-empty');
+  if (empty) empty.remove();
+  
+  // Construir opciones de cuentas
+  var optsCuentas = '<option value="">Seleccione una cuenta...</option>';
+  for (var i = 0; i < cuentasMovimiento.length; i++) {
+    var c = cuentasMovimiento[i];
+    optsCuentas += '<option value="' + c.codigo + '"'
+      + ' data-nombre="' + c.nombre + '"'
+      + ' data-aux="' + (c.requiereAuxiliar ? 'X' : '') + '"'
+      + ' data-doc="' + (c.requiereDocumento ? 'X' : '') + '"'
+      + ' data-efe="' + (c.afectaEfe ? 'X' : '') + '"'
+      + '>' + c.codigo + ' - ' + c.nombre + '</option>';
+  }
+  
+  // Construir opciones de tipos documento
+  var optsTipoDoc = '<option value="">--</option>';
+  var optsRefTipo = '<option value="">--</option>';
+  for (var i = 0; i < tiposDocumento.length; i++) {
+    var t = tiposDocumento[i];
+    optsTipoDoc += '<option value="' + t.codigo + '">' + t.abreviatura + ' - ' + t.nombre + '</option>';
+    optsRefTipo += '<option value="' + t.codigo + '">' + t.abreviatura + '</option>';
+  }
+  
+  var card = document.createElement('div');
+  card.className = 'comp-linea-card';
+  card.id = 'lineaCard-' + id;
+  card.innerHTML =
+    '<div class="comp-linea-main">'
+    + '  <div class="comp-linea-field">'
+    + '    <label>Cuenta Contable</label>'
+    + '    <select id="cuenta-' + id + '" onchange="onCuentaChangeModerno(' + id + ')">' + optsCuentas + '</select>'
+    + '  </div>'
+    + '  <div class="comp-linea-field">'
+    + '    <label>Debe</label>'
+    + '    <input type="number" id="debe-' + id + '" value="0" min="0" step="1" onchange="onMontoChange(' + id + ', \'debe\')" onfocus="this.select()">'
+    + '  </div>'
+    + '  <div class="comp-linea-field">'
+    + '    <label>Haber</label>'
+    + '    <input type="number" id="haber-' + id + '" value="0" min="0" step="1" onchange="onMontoChange(' + id + ', \'haber\')" onfocus="this.select()">'
+    + '  </div>'
+    + '  <button type="button" class="comp-linea-delete" onclick="eliminarLineaModerna(' + id + ')" title="Eliminar línea">'
+    + '    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>'
+    + '  </button>'
+    + '</div>'
+    + '<div class="comp-cuenta-info" id="cuentaInfo-' + id + '"></div>'
+    + '<div class="comp-linea-extras" id="extras-' + id + '">'
+    + '  <div class="comp-linea-field disabled" id="fieldAux-' + id + '">'
+    + '    <label>Auxiliar</label>'
+    + '    <div class="aux-autocomplete-wrap">'
+    + '      <input type="hidden" id="auxiliar-' + id + '">'
+    + '      <input type="text" id="auxBuscar-' + id + '" placeholder="Buscar RUT o nombre..." disabled autocomplete="off"'
+    + '             onkeyup="buscarAuxiliarAC(' + id + ')" onfocus="buscarAuxiliarAC(' + id + ')">'
+    + '      <button type="button" class="aux-clear-btn" id="auxClear-' + id + '" onclick="limpiarAuxiliar(' + id + ')" style="display:none" title="Limpiar">✕</button>'
+    + '      <div class="aux-dropdown" id="auxDropdown-' + id + '"></div>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div class="comp-linea-field disabled" id="fieldTipoDoc-' + id + '">'
+    + '    <label>Tipo Documento</label>'
+    + '    <select id="tipoDoc-' + id + '" disabled>' + optsTipoDoc + '</select>'
+    + '  </div>'
+    + '  <div class="comp-linea-field disabled" id="fieldNumDoc-' + id + '">'
+    + '    <label>Nº Documento</label>'
+    + '    <input type="text" id="numDoc-' + id + '" placeholder="Folio" disabled>'
+    + '  </div>'
+    + '  <div class="comp-linea-field disabled" id="fieldRef-' + id + '">'
+    + '    <label>Referencia</label>'
+    + '    <div style="display:flex;gap:4px;align-items:center">'
+    + '      <select id="refTipo-' + id + '" style="width:35%" disabled>' + optsRefTipo + '</select>'
+    + '      <input type="text" id="refNum-' + id + '" placeholder="Nº" style="width:35%" disabled>'
+    + '      <button type="button" class="btn-buscar-pend" id="btnBuscarPend-' + id + '" onclick="abrirBuscadorPendientes(' + id + ')" disabled title="Buscar docs pendientes">🔍</button>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div class="comp-linea-field disabled" id="fieldFlujo-' + id + '" style="min-width:180px">'
+    + '    <label>Categoría Flujo EFE</label>'
+    + '    <select id="catFlujo-' + id + '" disabled>' + buildOptsFlujo() + '</select>'
+    + '  </div>'
+    + '</div>';
+  
+  container.appendChild(card);
+  setTimeout(function() { document.getElementById('cuenta-' + id).focus(); }, 50);
+}
+
+function eliminarLineaModerna(id) {
+  var card = document.getElementById('lineaCard-' + id);
+  if (card) {
+    card.style.transform = 'translateX(100%)';
+    card.style.opacity = '0';
+    setTimeout(function() {
+      card.remove();
+      actualizarTotalesModerno();
+      
+      var container = document.getElementById('lineasContainer');
+      if (container.children.length === 0) {
+        container.innerHTML =
+          '<div class="comp-lineas-empty">'
+          + '  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>'
+          + '  <span>Haz clic en "Agregar Línea" para comenzar</span>'
+          + '</div>';
+      }
+    }, 200);
+  }
+}
+
+function onCuentaChangeModerno(id) {
+  var select = document.getElementById('cuenta-' + id);
+  var option = select.options[select.selectedIndex];
+  var extras = document.getElementById('extras-' + id);
+  var info = document.getElementById('cuentaInfo-' + id);
+  
+  if (!option.value) {
+    extras.classList.remove('visible');
+    info.classList.remove('visible');
+    resetCamposExtra(id);
+    return;
+  }
+  
+  var requiereAux = option.getAttribute('data-aux') === 'X';
+  var requiereDoc = option.getAttribute('data-doc') === 'X';
+  var afectaEfe = option.getAttribute('data-efe') === 'X';
+  
+  var infoHtml = '';
+  if (requiereAux) infoHtml += '<span>✓ Requiere Auxiliar</span>';
+  if (requiereDoc) infoHtml += '<span>✓ Requiere Documento</span>';
+  if (afectaEfe) infoHtml += '<span>✓ Afecta Flujo Efectivo</span>';
+  
+  if (requiereAux || requiereDoc || afectaEfe) {
+    info.innerHTML = infoHtml;
+    info.classList.add('visible');
+    extras.classList.add('visible');
+  } else {
+    info.classList.remove('visible');
+    extras.classList.remove('visible');
+  }
+  
+  // Campo Flujo EFE
+  var fieldFlujo = document.getElementById('fieldFlujo-' + id);
+  var selFlujo = document.getElementById('catFlujo-' + id);
+  if (afectaEfe) {
+    fieldFlujo.classList.remove('disabled');
+    fieldFlujo.classList.add('active');
+    selFlujo.disabled = false;
+  } else {
+    fieldFlujo.classList.add('disabled');
+    fieldFlujo.classList.remove('active');
+    selFlujo.disabled = true;
+    selFlujo.value = '';
+  }
+  
+  // Campo Auxiliar
+  var fieldAux = document.getElementById('fieldAux-' + id);
+  var auxBuscar = document.getElementById('auxBuscar-' + id);
+  var auxHidden = document.getElementById('auxiliar-' + id);
+  if (requiereAux) {
+    fieldAux.classList.remove('disabled');
+    auxBuscar.disabled = false;
+    auxBuscar.placeholder = 'Buscar RUT o nombre...';
+  } else {
+    fieldAux.classList.add('disabled');
+    auxBuscar.disabled = true;
+    auxBuscar.value = '';
+    auxHidden.value = '';
+    document.getElementById('auxClear-' + id).style.display = 'none';
+  }
+  
+  // Campos Documento
+  toggleCampo('fieldTipoDoc-' + id, 'tipoDoc-' + id, requiereDoc);
+  toggleCampo('fieldNumDoc-' + id, 'numDoc-' + id, requiereDoc);
+  toggleCampo('fieldRef-' + id, null, requiereDoc);
+  
+  if (requiereDoc) {
+    document.getElementById('refTipo-' + id).disabled = false;
+    document.getElementById('refNum-' + id).disabled = false;
+    document.getElementById('btnBuscarPend-' + id).disabled = false;
+  } else {
+    document.getElementById('refTipo-' + id).disabled = true;
+    document.getElementById('refTipo-' + id).value = '';
+    document.getElementById('refNum-' + id).disabled = true;
+    document.getElementById('refNum-' + id).value = '';
+    document.getElementById('btnBuscarPend-' + id).disabled = true;
+  }
+}
+
+function toggleCampo(fieldId, inputId, activo, placeholderActivo, placeholderInactivo) {
+  var field = document.getElementById(fieldId);
+  if (!field) return;
+  
+  if (activo) {
+    field.classList.remove('disabled');
+    field.classList.add('active', 'required');
+    if (inputId) {
+      var input = document.getElementById(inputId);
+      input.disabled = false;
+      if (placeholderActivo) input.placeholder = placeholderActivo;
+    }
+  } else {
+    field.classList.add('disabled');
+    field.classList.remove('active', 'required');
+    if (inputId) {
+      var input = document.getElementById(inputId);
+      input.disabled = true;
+      input.value = '';
+      if (placeholderInactivo) input.placeholder = placeholderInactivo;
+    }
+  }
+}
+
+function resetCamposExtra(id) {
+  var fields = ['auxiliar', 'auxBuscar', 'tipoDoc', 'numDoc', 'refTipo', 'refNum'];
+  for (var i = 0; i < fields.length; i++) {
+    var el = document.getElementById(fields[i] + '-' + id);
+    if (el) { el.disabled = true; el.value = ''; }
+  }
+  var clearBtn = document.getElementById('auxClear-' + id);
+  if (clearBtn) clearBtn.style.display = 'none';
+  var dropdown = document.getElementById('auxDropdown-' + id);
+  if (dropdown) dropdown.innerHTML = '';
+  var btnPend = document.getElementById('btnBuscarPend-' + id);
+  if (btnPend) btnPend.disabled = true;
+  
+  var containers = ['fieldAux', 'fieldTipoDoc', 'fieldNumDoc', 'fieldRef'];
+  for (var i = 0; i < containers.length; i++) {
+    var el = document.getElementById(containers[i] + '-' + id);
+    if (el) { el.classList.add('disabled'); el.classList.remove('active', 'required'); }
+  }
+}
+
+function onMontoChange(id, tipo) {
+  var debeInput = document.getElementById('debe-' + id);
+  var haberInput = document.getElementById('haber-' + id);
+  
+  if (tipo === 'debe' && parseFloat(debeInput.value) > 0) {
+    debeInput.classList.add('debe-active');
+    haberInput.value = 0;
+    haberInput.classList.remove('haber-active');
+  } else if (tipo === 'haber' && parseFloat(haberInput.value) > 0) {
+    haberInput.classList.add('haber-active');
+    debeInput.value = 0;
+    debeInput.classList.remove('debe-active');
+  }
+  
+  actualizarTotalesModerno();
+}
+
+function actualizarTotalesModerno() {
+  var totalDebe = 0, totalHaber = 0;
+  
+  var cards = document.querySelectorAll('.comp-linea-card');
+  for (var i = 0; i < cards.length; i++) {
+    var id = cards[i].id.replace('lineaCard-', '');
+    var debeEl = document.getElementById('debe-' + id);
+    var haberEl = document.getElementById('haber-' + id);
+    totalDebe += parseFloat(debeEl ? debeEl.value : 0) || 0;
+    totalHaber += parseFloat(haberEl ? haberEl.value : 0) || 0;
+  }
+  
+  document.getElementById('totalDebeModerno').textContent = formatMoney(totalDebe);
+  document.getElementById('totalHaberModerno').textContent = formatMoney(totalHaber);
+  
+  var diferencia = Math.abs(totalDebe - totalHaber);
+  var cuadra = diferencia < 1;
+  
+  var difRow = document.getElementById('diferenciaRow');
+  var difValue = document.getElementById('diferenciaModerno');
+  var indicadorCuadra = document.getElementById('indicadorCuadra');
+  
+  if (cuadra && totalDebe > 0) {
+    difRow.classList.remove('visible');
+    indicadorCuadra.classList.add('visible');
+    document.getElementById('btnGuardarComp').disabled = false;
+  } else {
+    difRow.classList.add('visible');
+    difValue.textContent = formatMoney(totalDebe - totalHaber);
+    difValue.style.color = '#dc2626';
+    indicadorCuadra.classList.remove('visible');
+    document.getElementById('btnGuardarComp').disabled = totalDebe === 0;
+  }
+}
+
+// ===========================================
+// GUARDAR COMPROBANTE — maneja duplicados v3
+// ===========================================
+
+function guardarComprobante(forzarDuplicados) {
+  var tipo = document.getElementById('compTipo').value;
+  var fecha = document.getElementById('compFecha').value;
+  var glosa = document.getElementById('compGlosa').value.trim();
+  
+  if (!tipo) { showToast('Seleccione el tipo de comprobante', 'error'); return; }
+  if (!fecha) { showToast('Ingrese la fecha', 'error'); return; }
+  if (!glosa) { showToast('Ingrese una glosa o descripción', 'error'); return; }
+  
+  // Recolectar líneas
+  var lineas = [];
+  var errores = [];
+  
+  var cards = document.querySelectorAll('.comp-linea-card');
+  for (var i = 0; i < cards.length; i++) {
+    var id = cards[i].id.replace('lineaCard-', '');
+    var cuentaSelect = document.getElementById('cuenta-' + id);
+    var cuenta = cuentaSelect ? cuentaSelect.value : '';
+    var debe = parseFloat(document.getElementById('debe-' + id).value) || 0;
+    var haber = parseFloat(document.getElementById('haber-' + id).value) || 0;
+    
+    if (!cuenta) continue;
+    if (debe === 0 && haber === 0) continue;
+    
+    var option = cuentaSelect.options[cuentaSelect.selectedIndex];
+    var requiereAux = option.getAttribute('data-aux') === 'X';
+    var requiereDoc = option.getAttribute('data-doc') === 'X';
+    
+    var auxiliar = (document.getElementById('auxiliar-' + id) || {}).value || '';
+    var tipoDoc = (document.getElementById('tipoDoc-' + id) || {}).value || '';
+    var numDoc = (document.getElementById('numDoc-' + id) || {}).value || '';
+    var refTipo = (document.getElementById('refTipo-' + id) || {}).value || '';
+    var refNum = (document.getElementById('refNum-' + id) || {}).value || '';
+    
+    if (requiereAux && !auxiliar) {
+      errores.push('Cuenta ' + cuenta + ' requiere auxiliar (RUT)');
+      cards[i].classList.add('invalid');
+    }
+    if (requiereDoc && (!tipoDoc || !numDoc)) {
+      errores.push('Cuenta ' + cuenta + ' requiere tipo y número de documento');
+      cards[i].classList.add('invalid');
+    }
+    
+    var catFlujoVal = (document.getElementById('catFlujo-' + id) || {}).value || '';
+    
+    lineas.push({
+      cuenta: cuenta, debe: debe, haber: haber,
+      auxiliar: auxiliar, tipoDoc: tipoDoc, numDoc: numDoc,
+      refTipo: refTipo, refNum: refNum,
+      categoriaFlujo: catFlujoVal ? parseInt(catFlujoVal) : ''
+    });
+  }
+  
+  if (errores.length > 0) { showToast(errores[0], 'error'); return; }
+  if (lineas.length === 0) { showToast('Debe agregar al menos una línea con cuenta y monto', 'error'); return; }
+  
+  var totalDebe = 0, totalHaber = 0;
+  for (var i = 0; i < lineas.length; i++) { totalDebe += lineas[i].debe; totalHaber += lineas[i].haber; }
+  if (Math.abs(totalDebe - totalHaber) >= 1) {
+    showToast('El comprobante no cuadra. Diferencia: ' + formatMoney(totalDebe - totalHaber), 'error');
+    return;
+  }
+  
+  // Deshabilitar botón
+  var btnGuardar = document.getElementById('btnGuardarComp');
+  btnGuardar.disabled = true;
+  btnGuardar.innerHTML = '<span class="spinner"></span> Guardando...';
+  
+  var datos = {
+    tipo: tipo, fecha: fecha, glosa: glosa, lineas: lineas,
+    forzarDuplicados: forzarDuplicados || false  // ← v3: soporte duplicados
+  };
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      resetBotonGuardar(btnGuardar);
+      
+      if (resultado.success) {
+        // Mostrar warnings si los hay
+        if (resultado.warnings && resultado.warnings.length > 0) {
+          showToast('Comprobante creado con advertencias: ' + resultado.warnings.join('; '), 'info');
+        } else {
+          showToast('Comprobante ' + resultado.comprobante.tipo + '-' + resultado.comprobante.numero + ' creado exitosamente');
+        }
+        cerrarModal('modalComprobante');
+        cargarComprobantes();
+        cargarDatos();
+      } else if (resultado.requiereConfirmacion) {
+        // v3: Duplicados detectados — preguntar al usuario
+        mostrarConfirmacionDuplicados(resultado, datos);
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(function(error) {
+      resetBotonGuardar(btnGuardar);
+      handleError(error);
+    })
+    .guardarComprobanteUI(datos);
+}
+
+function resetBotonGuardar(btn) {
+  btn.disabled = false;
+  btn.innerHTML =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+    + '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>'
+    + '<polyline points="17 21 17 13 7 13 7 21"></polyline>'
+    + '<polyline points="7 3 7 8 15 8"></polyline></svg>'
+    + ' Guardar Comprobante';
+}
+
+/**
+ * Muestra modal de confirmación cuando se detectan documentos duplicados.
+ * Si el usuario confirma, reenvía con forzarDuplicados = true.
+ */
+function mostrarConfirmacionDuplicados(resultado, datosOriginales) {
+  var msg = '⚠️ DOCUMENTOS DUPLICADOS DETECTADOS\n\n';
+  if (resultado.duplicados) {
+    for (var i = 0; i < resultado.duplicados.length; i++) {
+      var d = resultado.duplicados[i];
+      msg += '• ' + (d.mensaje || d.tipoDoc + '-' + d.numDoc) + '\n';
+    }
+  } else {
+    msg += resultado.error + '\n';
+  }
+  msg += '\n¿Desea guardar de todos modos?';
+  
+  if (confirm(msg)) {
+    guardarComprobante(true);  // Reenviar con forzarDuplicados = true
+  }
+}
+
+// Compatibilidad
+function agregarLinea() { agregarLineaModerna(); }
+function calcularTotales() { actualizarTotalesModerno(); }
+
+// ===========================================
+// VER COMPROBANTE
+// ===========================================
+
+function verComprobante(id) {
+  google.script.run
+    .withSuccessHandler(function(comp) {
+      if (!comp) { showToast('Comprobante no encontrado', 'error'); return; }
+      
+      comprobanteActual = comp;
+      document.getElementById('verComprobanteTitle').textContent = comp.id;
+      
+      var lineasHtml = '';
+      for (var i = 0; i < comp.lineas.length; i++) {
+        var l = comp.lineas[i];
+        lineasHtml +=
+          '<tr>'
+          + '<td><strong>' + l.cuenta + '</strong><br><small>' + l.nombreCuenta + '</small></td>'
+          + '<td>' + (l.glosa || '') + '</td>'
+          + '<td>' + (l.auxiliar ? l.auxiliar + '<br><small>' + l.nombreAuxiliar + '</small>' : '') + '</td>'
+          + '<td>' + (l.tipoDoc ? l.tipoDoc + '-' + l.numDoc : '') + '</td>'
+          + '<td>' + (l.refTipo ? l.refTipo + '-' + l.refNum : '') + '</td>'
+          + '<td class="text-right">' + (l.debe > 0 ? formatMoney(l.debe) : '') + '</td>'
+          + '<td class="text-right">' + (l.haber > 0 ? formatMoney(l.haber) : '') + '</td>'
+          + '</tr>';
+      }
+      
+      var estadoBadge = comp.estado === 'VIGENTE' ? 'badge-success' : comp.estado === 'ANULADO' ? 'badge-danger' : 'badge-warning';
+      
+      var html =
+        '<div class="comprobante-detalle">'
+        + '  <div class="comprobante-header">'
+        + '    <div class="titulo">' + comp.glosa + '</div>'
+        + '    <div class="info">'
+        + '      <span><strong>Fecha:</strong> ' + formatDate(comp.fecha) + '</span>'
+        + '      <span><strong>Tipo:</strong> ' + getTipoNombre(comp.tipo) + '</span>'
+        + '      <span><strong>Estado:</strong> <span class="badge ' + estadoBadge + '">' + comp.estado + '</span></span>'
+        + '      <span><strong>Origen:</strong> ' + comp.origen + '</span>'
+        + '    </div>'
+        + '  </div>'
+        + '  <div class="comprobante-lineas">'
+        + '    <table class="data-table">'
+        + '      <thead><tr><th>Cuenta</th><th>Glosa</th><th>Auxiliar</th><th>Documento</th><th>Referencia</th><th class="text-right">Debe</th><th class="text-right">Haber</th></tr></thead>'
+        + '      <tbody>' + lineasHtml + '</tbody>'
+        + '      <tfoot><tr class="total-row"><td colspan="5"><strong>TOTALES</strong></td><td class="text-right"><strong>' + formatMoney(comp.totalDebe) + '</strong></td><td class="text-right"><strong>' + formatMoney(comp.totalHaber) + '</strong></td></tr></tfoot>'
+        + '    </table>'
+        + '  </div>'
+        + '</div>';
+      
+      document.getElementById('verComprobanteBody').innerHTML = html;
+      
+      // Mostrar/ocultar botones según estado
+      var btnAnular = document.getElementById('btnAnular');
+      var btnEliminar = document.getElementById('btnEliminar');
+      if (btnAnular) btnAnular.style.display = comp.estado === 'VIGENTE' ? 'inline-block' : 'none';
+      if (btnEliminar) btnEliminar.style.display = comp.estado === 'ANULADO' ? 'inline-block' : 'none';
+      
+      abrirModal('modalVerComprobante');
+    })
+    .withFailureHandler(handleError)
+    .getComprobanteUI(id);
+}
+
+// ===========================================
+// ANULAR COMPROBANTE — maneja ref cruzadas v3
+// ===========================================
+
+function anularComprobanteModal(forzar) {
+  if (!comprobanteActual) return;
+  
+  var motivo = prompt('Ingrese el motivo de anulación:');
+  if (!motivo) return;
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      if (resultado.success) {
+        showToast('Comprobante anulado');
+        cerrarModal('modalVerComprobante');
+        cargarComprobantes();
+        cargarDatos();
+      } else if (resultado.requiereConfirmacion) {
+        // v3: hay referencias cruzadas — preguntar si forzar
+        var msg = '⚠️ REFERENCIAS CRUZADAS DETECTADAS\n\n';
+        if (resultado.referencias) {
+          for (var i = 0; i < resultado.referencias.length; i++) {
+            msg += '• ' + resultado.referencias[i] + '\n';
+          }
+        } else {
+          msg += resultado.error + '\n';
+        }
+        msg += '\n¿Desea anular de todos modos?';
+        
+        if (confirm(msg)) {
+          // Reintentar con forzar = true
+          google.script.run
+            .withSuccessHandler(function(res2) {
+              if (res2.success) {
+                showToast('Comprobante anulado (forzado)');
+                cerrarModal('modalVerComprobante');
+                cargarComprobantes();
+                cargarDatos();
+              } else {
+                showToast(res2.error, 'error');
+              }
+            })
+            .withFailureHandler(handleError)
+            .anularComprobanteUI(comprobanteActual.id, motivo, true);
+        }
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(handleError)
+    .anularComprobanteUI(comprobanteActual.id, motivo, forzar || false);
+}
+
+function imprimirComprobante() {
+  window.print();
+}
+
+function eliminarComprobanteModal() {
+  if (!comprobanteActual) return;
+  if (comprobanteActual.estado !== 'ANULADO') {
+    showToast('Solo se pueden eliminar comprobantes anulados', 'error');
+    return;
+  }
+  
+  if (!confirm('¿Está seguro de ELIMINAR permanentemente el comprobante ' + comprobanteActual.id + '?\n\nEsta acción NO se puede deshacer.')) return;
+  if (!confirm('CONFIRMACIÓN FINAL: ¿Eliminar ' + comprobanteActual.id + ' y todos sus movimientos?')) return;
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      if (resultado.success) {
+        showToast('Comprobante eliminado permanentemente');
+        cerrarModal('modalVerComprobante');
+        cargarComprobantes();
+        cargarDatos();
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(handleError)
+    .eliminarComprobanteUI(comprobanteActual.id);
+}
+
+// ===========================================
+// PLAN DE CUENTAS
+// ===========================================
+
+function cargarPlanCuentas() {
+  google.script.run
+    .withSuccessHandler(function(data) {
+      renderPlanCuentas(data.cuentas);
+    })
+    .withFailureHandler(handleError)
+    .getPlanCuentasUI();
+}
+
+function renderPlanCuentas(cuentas) {
+  var tbody = document.getElementById('tbodyPlanCuentas');
+  
+  if (!cuentas || cuentas.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="loading">No hay cuentas</td></tr>';
+    return;
+  }
+  
+  var html = '';
+  for (var i = 0; i < cuentas.length; i++) {
+    var c = cuentas[i];
+    html += '<tr>'
+      + '<td><code>' + c.codigo + '</code></td>'
+      + '<td style="padding-left:' + ((c.nivel - 1) * 20) + 'px">' + c.nombre + '</td>'
+      + '<td>' + getTipoLabel(c.tipo) + '</td>'
+      + '<td class="text-center">' + (c.requiereAuxiliar ? '✓' : '') + '</td>'
+      + '<td class="text-center">' + (c.requiereDocumento ? '✓' : '') + '</td>'
+      + '<td class="text-center">' + (c.esConciliable ? '✓' : '') + '</td>'
+      + '<td><span class="badge ' + (c.activa ? 'badge-success' : 'badge-danger') + '">' + (c.activa ? 'Sí' : 'No') + '</span></td>'
+      + '<td><button class="btn-icon" onclick="editarCuenta(\'' + c.codigo + '\')" title="Editar">✏️</button></td>'
+      + '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+function getTipoLabel(tipo) {
+  var labels = { A: 'Activo', P: 'Pasivo', T: 'Patrimonio', I: 'Ingreso', G: 'Gasto' };
+  return labels[tipo] || tipo;
+}
+
+function abrirModalCuenta() {
+  document.getElementById('formCuenta').reset();
+  abrirModal('modalCuenta');
+}
+
+function guardarCuenta() {
+  var datos = {
+    codigo: document.getElementById('ctaCodigo').value,
+    nombre: document.getElementById('ctaNombre').value,
+    tipo: document.getElementById('ctaTipo').value,
+    requiereAuxiliar: document.getElementById('ctaAuxiliar').checked,
+    requiereDocumento: document.getElementById('ctaDocumento').checked,
+    esConciliable: document.getElementById('ctaConciliable').checked
+  };
+  
+  if (!datos.codigo || !datos.nombre) {
+    showToast('Complete los campos obligatorios', 'error');
+    return;
+  }
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      if (resultado.success) {
+        showToast('Cuenta guardada');
+        cerrarModal('modalCuenta');
+        cargarPlanCuentas();
+        cargarCuentasParaSelector();
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(handleError)
+    .guardarCuentaUI(datos);  // ← v3: guardarCuentaUI
+}
+
+// ===========================================
+// AUXILIARES
+// ===========================================
+
+function cargarAuxiliares() {
+  var filtros = {
+    busqueda: document.getElementById('buscarAuxiliar').value,
+    tipo: document.getElementById('filtroTipoAux').value
+  };
+  
+  google.script.run
+    .withSuccessHandler(renderAuxiliares)
+    .withFailureHandler(handleError)
+    .getAuxiliaresUI(filtros);
+}
+
+function filtrarAuxiliares() {
+  cargarAuxiliares();
+}
+
+// renderAuxiliares: movido a sección AUTOCOMPLETE AUXILIAR más abajo
+
+function abrirModalAuxiliar() {
+  document.getElementById('formAuxiliar').reset();
+  abrirModal('modalAuxiliar');
+}
+
+function guardarAuxiliar() {
+  var datos = {
+    rut: document.getElementById('auxRut').value,
+    nombre: document.getElementById('auxNombre').value,
+    tipo: document.getElementById('auxTipo').value,
+    email: document.getElementById('auxEmail').value,
+    plazoPago: parseInt(document.getElementById('auxPlazo').value) || 30
+  };
+  
+  if (!datos.rut || !datos.nombre) {
+    showToast('Complete los campos obligatorios', 'error');
+    return;
+  }
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      if (resultado.success) {
+        showToast('Auxiliar guardado');
+        cerrarModal('modalAuxiliar');
+        cargarAuxiliares();
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(handleError)
+    .guardarAuxiliarUI(datos);  // ← v3: guardarAuxiliarUI
+}
+
+// ===========================================
+// AUTOCOMPLETE AUXILIAR EN COMPROBANTE
+// ===========================================
+
+var _auxDebounce = null;
+var _lineaActualPendientes = null;
+
+function buscarAuxiliarAC(id) {
+  var input = document.getElementById('auxBuscar-' + id);
+  var dropdown = document.getElementById('auxDropdown-' + id);
+  var texto = input.value.trim();
+  
+  if (texto.length < 2) { dropdown.innerHTML = ''; dropdown.style.display = 'none'; return; }
+  
+  clearTimeout(_auxDebounce);
+  _auxDebounce = setTimeout(function() {
+    google.script.run
+      .withSuccessHandler(function(resultados) { renderAuxDropdown(id, resultados); })
+      .withFailureHandler(function() { dropdown.innerHTML = ''; dropdown.style.display = 'none'; })
+      .buscarAuxiliaresUI(texto);
+  }, 300);
+}
+
+function renderAuxDropdown(id, resultados) {
+  var dropdown = document.getElementById('auxDropdown-' + id);
+  if (!resultados || resultados.length === 0) {
+    dropdown.innerHTML = '<div class="aux-dd-empty">Sin resultados</div>';
+    dropdown.style.display = 'block';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < resultados.length; i++) {
+    var a = resultados[i];
+    html += '<div class="aux-dd-item" onclick="seleccionarAuxiliar(' + id + ',\'' + a.rutNumero + '\',\'' + escapeHtml(a.nombre) + '\',\'' + a.rut + '\')">'
+      + '<span class="aux-dd-rut">' + a.rut + '</span>'
+      + '<span class="aux-dd-nombre">' + a.nombre + '</span>'
+      + '<span class="aux-dd-tipo badge badge-info">' + a.tipo + '</span>'
+      + '</div>';
+  }
+  dropdown.innerHTML = html;
+  dropdown.style.display = 'block';
+}
+
+function seleccionarAuxiliar(id, rutNumero, nombre, rutFormateado) {
+  document.getElementById('auxiliar-' + id).value = rutNumero;
+  document.getElementById('auxBuscar-' + id).value = rutFormateado + ' - ' + nombre;
+  document.getElementById('auxDropdown-' + id).style.display = 'none';
+  document.getElementById('auxClear-' + id).style.display = 'inline-block';
+}
+
+function limpiarAuxiliar(id) {
+  document.getElementById('auxiliar-' + id).value = '';
+  document.getElementById('auxBuscar-' + id).value = '';
+  document.getElementById('auxClear-' + id).style.display = 'none';
+}
+
+function escapeHtml(s) {
+  return s ? s.replace(/'/g, "\\'").replace(/"/g, '&quot;') : '';
+}
+
+// Cerrar dropdowns al hacer clic fuera
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.aux-autocomplete-wrap')) {
+    var dds = document.querySelectorAll('.aux-dropdown');
+    for (var i = 0; i < dds.length; i++) dds[i].style.display = 'none';
+  }
+});
+
+// ===========================================
+// MODAL DOCUMENTOS PENDIENTES (estilo Softland)
+// ===========================================
+
+function abrirBuscadorPendientes(lineaId) {
+  var cuentaSelect = document.getElementById('cuenta-' + lineaId);
+  var auxHidden = document.getElementById('auxiliar-' + lineaId);
+  if (!cuentaSelect || !cuentaSelect.value) { showToast('Seleccione una cuenta primero', 'error'); return; }
+  
+  _lineaActualPendientes = lineaId;
+  var cuenta = cuentaSelect.value;
+  var auxiliar = auxHidden ? auxHidden.value : '';
+  
+  var modal = document.getElementById('modalDocsPendientes');
+  document.getElementById('pendCuenta').textContent = cuenta;
+  document.getElementById('pendAuxiliar').textContent = auxiliar || 'Todos';
+  document.getElementById('tbodyPendientes').innerHTML = '<tr><td colspan="7" class="loading">Buscando documentos pendientes...</td></tr>';
+  abrirModal('modalDocsPendientes');
+  
+  google.script.run
+    .withSuccessHandler(renderDocsPendientes)
+    .withFailureHandler(function(e) {
+      document.getElementById('tbodyPendientes').innerHTML = '<tr><td colspan="7" class="loading">Error: ' + e.message + '</td></tr>';
+    })
+    .getDocsPendientesUI(cuenta, auxiliar);
+}
+
+function renderDocsPendientes(data) {
+  var tbody = document.getElementById('tbodyPendientes');
+  if (!data || data.error) {
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">' + (data ? data.error : 'Sin datos') + '</td></tr>';
+    return;
+  }
+  
+  var docs = data.documentos || [];
+  if (docs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">No hay documentos pendientes</td></tr>';
+    return;
+  }
+  
+  var html = '';
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    var fechaStr = d.fechaDoc ? fmtFechaSimple(d.fechaDoc) : '-';
+    html += '<tr class="pend-row" onclick="seleccionarDocPendiente(\'' + (d.tipoDoc || '') + '\',\'' + (d.numDoc || '') + '\',' + (d.saldo || 0) + ')">'
+      + '<td>' + (d.tipoDoc || '') + '</td>'
+      + '<td>' + (d.numDoc || '') + '</td>'
+      + '<td>' + fechaStr + '</td>'
+      + '<td>' + (d.nombreAuxiliar || d.auxiliar || '') + '</td>'
+      + '<td class="text-right">' + formatMoney(d.montoOriginal || 0) + '</td>'
+      + '<td class="text-right">' + formatMoney(d.saldo || 0) + '</td>'
+      + '<td>' + (d.diasAntiguedad || 0) + ' días</td>'
+      + '</tr>';
+  }
+  tbody.innerHTML = html;
+  
+  document.getElementById('pendTotal').textContent = formatMoney(data.totalSaldo || 0);
+  document.getElementById('pendCantidad').textContent = docs.length + ' docs';
+}
+
+function seleccionarDocPendiente(tipoDoc, numDoc, saldo) {
+  if (!_lineaActualPendientes) return;
+  var id = _lineaActualPendientes;
+  
+  // Llenar DOCUMENTO con el doc seleccionado (mismo doc = REGISTRO en el saldo)
+  var tipoDocSelect = document.getElementById('tipoDoc-' + id);
+  if (tipoDocSelect) {
+    for (var i = 0; i < tipoDocSelect.options.length; i++) {
+      if (tipoDocSelect.options[i].value === tipoDoc) {
+        tipoDocSelect.selectedIndex = i;
+        break;
+      }
+    }
+  }
+  document.getElementById('numDoc-' + id).value = numDoc;
+  
+  // Llenar REF con el mismo documento (apunta al doc que se rebaja)
+  var refTipoSelect = document.getElementById('refTipo-' + id);
+  if (refTipoSelect) {
+    for (var i = 0; i < refTipoSelect.options.length; i++) {
+      if (refTipoSelect.options[i].value === tipoDoc) {
+        refTipoSelect.selectedIndex = i;
+        break;
+      }
+    }
+  }
+  document.getElementById('refNum-' + id).value = numDoc;
+  
+  // Auto-llenar monto según naturaleza de la cuenta
+  // Rebaja: Activo (CxC) → haber; Pasivo (CxP) → debe
+  if (saldo && Math.abs(saldo) > 0) {
+    var montoAbs = Math.abs(Math.round(saldo));
+    var cuentaSelect = document.getElementById('cuenta-' + id);
+    var cuentaCodigo = cuentaSelect ? cuentaSelect.value : '';
+    var primerDigito = cuentaCodigo.charAt(0);
+    
+    // Activos (1) y Gastos (5,6,7): rebaja va al Haber
+    // Pasivos (2), Patrimonio (3) e Ingresos (4): rebaja va al Debe
+    if (primerDigito === '1' || primerDigito === '5' || primerDigito === '6' || primerDigito === '7') {
+      document.getElementById('haber-' + id).value = montoAbs;
+      document.getElementById('debe-' + id).value = 0;
+      document.getElementById('haber-' + id).classList.add('haber-active');
+      document.getElementById('debe-' + id).classList.remove('debe-active');
+    } else {
+      document.getElementById('debe-' + id).value = montoAbs;
+      document.getElementById('haber-' + id).value = 0;
+      document.getElementById('debe-' + id).classList.add('debe-active');
+      document.getElementById('haber-' + id).classList.remove('haber-active');
+    }
+    actualizarTotalesModerno();
+  }
+  
+  cerrarModal('modalDocsPendientes');
+  showToast('Referencia asignada: ' + tipoDoc + ' ' + numDoc + (saldo ? ' por ' + formatMoney(Math.abs(Math.round(saldo))) : ''));
+}
+
+function fmtFechaSimple(f) {
+  if (!f) return '';
+  try {
+    var d = new Date(f);
+    if (isNaN(d.getTime())) return String(f);
+    return ('0'+d.getDate()).slice(-2)+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+d.getFullYear();
+  } catch(e) { return String(f); }
+}
+
+// ===========================================
+// AUXILIARES TAB - con cod auxiliar
+// ===========================================
+
+function renderAuxiliares(auxiliares) {
+  var tbody = document.getElementById('tbodyAuxiliares');
+  
+  if (!auxiliares || auxiliares.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="loading">No hay auxiliares</td></tr>';
+    return;
+  }
+  
+  var html = '';
+  for (var i = 0; i < auxiliares.length; i++) {
+    var a = auxiliares[i];
+    html += '<tr>'
+      + '<td><code>' + a.rutNumero + '</code></td>'
+      + '<td><code>' + a.rut + '</code></td>'
+      + '<td>' + a.nombre + '</td>'
+      + '<td><span class="badge badge-info">' + a.tipo + '</span></td>'
+      + '<td>' + a.plazoPago + ' días</td>'
+      + '<td>' + (a.email || '-') + '</td>'
+      + '<td><span class="badge ' + (a.activo ? 'badge-success' : 'badge-danger') + '">' + (a.activo ? 'Sí' : 'No') + '</span></td>'
+      + '<td><button class="btn-icon" onclick="editarAuxiliar(\'' + a.rutNumero + '\')" title="Editar">✏️</button></td>'
+      + '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+// ===========================================
+// CIERRE Y APERTURA (v3: ANUAL, AÑOS SIMULTÁNEOS)
+// ===========================================
+
+var _cierreAñoSeleccionado = null;
+var _ciereDefaultAcumulados = '';
+var _cierreDatos = null;
+
+function cargarEstadoCierre() {
+  // Determinar año a mostrar
+  if (!_cierreAñoSeleccionado) {
+    _cierreAñoSeleccionado = datosContabilidad ? datosContabilidad.añoActivo : new Date().getFullYear();
+  }
+  
+  google.script.run
+    .withSuccessHandler(renderEstadoCierre)
+    .withFailureHandler(handleError)
+    .getEstadoCierreUI(_cierreAñoSeleccionado);
+}
+
+function renderEstadoCierre(datos) {
+  var container = document.getElementById('cierreContenido');
+  if (!container) return;
+  
+  _cierreDatos = datos;
+  _ciereDefaultAcumulados = datos.defaultAcumulados || '';
+  
+  // Selector de año
+  var añoActual = new Date().getFullYear();
+  var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">';
+  html += '<label style="font-weight:600;font-size:14px">Año Fiscal:</label>';
+  html += '<select id="selAñoCierre" class="form-control" style="width:120px" onchange="cambiarAñoCierre(this.value)">';
+  for (var a = añoActual + 1; a >= añoActual - 5; a--) {
+    html += '<option value="' + a + '"' + (a === datos.año ? ' selected' : '') + '>' + a + '</option>';
+  }
+  html += '</select></div>';
+  
+  // Estado del año
+  var estadoColor = datos.estado === 'ABIERTO' ? '#10b981' : (datos.estado === 'CERRADO' ? '#ef4444' : '#f59e0b');
+  var estadoBg = datos.estado === 'ABIERTO' ? '#ecfdf5' : (datos.estado === 'CERRADO' ? '#fef2f2' : '#fffbeb');
+  var estadoIcon = datos.estado === 'ABIERTO' ? '🟢' : (datos.estado === 'CERRADO' ? '🔴' : '⚪');
+  
+  html += '<div style="background:' + estadoBg + ';border:1px solid ' + estadoColor + ';border-radius:8px;padding:16px;margin-bottom:16px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+  html += '<div>';
+  html += '<h3 style="margin:0 0 8px 0">' + estadoIcon + ' Año ' + datos.año + '</h3>';
+  html += '<span style="background:' + estadoColor + ';color:white;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600">' + datos.estado + '</span>';
+  html += '</div>';
+  html += '<div style="text-align:right">';
+  html += '<div style="font-size:13px;color:#64748b">Resultado Proyectado</div>';
+  html += '<div style="font-size:20px;font-weight:700;color:' + (datos.resultadoProyectado >= 0 ? '#10b981' : '#ef4444') + '">' + formatMoney(datos.resultadoProyectado) + '</div>';
+  html += '</div></div>';
+  
+  if (datos.fechaApertura) {
+    html += '<div style="margin-top:10px;font-size:12px;color:#64748b">Apertura: ' + formatDate(datos.fechaApertura);
+    if (datos.fechaCierre) html += ' · Cierre: ' + formatDate(datos.fechaCierre);
+    html += '</div>';
+  }
+  if (datos.archivoUrl) {
+    html += '<div style="margin-top:4px"><a href="' + datos.archivoUrl + '" target="_blank" style="font-size:12px">📋 Ver respaldo archivado</a></div>';
+  }
+  html += '</div>';
+  
+  // Acciones
+  html += '<div style="display:flex;flex-wrap:wrap;gap:10px">';
+  
+  if (datos.estado === 'NO EXISTE') {
+    html += '<button class="btn btn-primary" onclick="ejecutarAperturaAño(' + datos.año + ')" style="flex:1">'
+      + '📂 Abrir Año ' + datos.año + '</button>';
+  }
+  
+  if (datos.puedeCerrar) {
+    html += '<button class="btn btn-danger" onclick="ejecutarCierreAño(' + datos.año + ')" style="flex:1">'
+      + '🔒 Cerrar Año ' + datos.año + '</button>';
+  }
+  
+  if (datos.puedeReabrir) {
+    html += '<button class="btn btn-warning" onclick="ejecutarReabrirAño(' + datos.año + ')" style="flex:1">'
+      + '🔓 Reabrir Año ' + datos.año + '</button>';
+  }
+  
+  if (datos.puedeAbrirSiguiente) {
+    html += '<button class="btn btn-primary" onclick="ejecutarAperturaAño(' + (datos.año + 1) + ')" style="flex:1">'
+      + '📂 Abrir Año ' + (datos.año + 1) + '</button>';
+  }
+  
+  if (datos.puedeReapertura) {
+    html += '<button class="btn btn-secondary" onclick="ejecutarReApertura(' + datos.año + ')" style="flex:1">'
+      + '🔄 Recalcular Apertura ' + datos.año + '</button>';
+  }
+  
+  html += '</div>';
+  
+  // Info contextual
+  html += '<div style="margin-top:16px;padding:12px;background:#f1f5f9;border-radius:6px;font-size:12px;color:#475569">';
+  if (datos.estado === 'ABIERTO') {
+    html += '<strong>Año abierto:</strong> Puede contabilizar normalmente. ';
+    if (datos.puedeAbrirSiguiente) {
+      html += 'Puede abrir el año siguiente sin cerrar este (apertura provisional). ';
+    }
+    if (datos.puedeReapertura) {
+      html += '<br>Use "Recalcular Apertura" si modificó movimientos en el año anterior.';
+    }
+  } else if (datos.estado === 'CERRADO') {
+    html += '<strong>Año cerrado:</strong> No se puede contabilizar. Use "Reabrir" si necesita hacer correcciones.';
+  } else {
+    html += '<strong>Año no existe:</strong> Use "Abrir Año" para comenzar a contabilizar.';
+  }
+  html += '</div>';
+  
+  container.innerHTML = html;
+}
+
+function cambiarAñoCierre(año) {
+  _cierreAñoSeleccionado = parseInt(año);
+  cargarEstadoCierre();
+}
+
+function ejecutarCierreAño(año) {
+  if (!confirm('¿Cerrar el año ' + año + '?\n\nSe generará el comprobante de cierre (salda Ingresos y Gastos contra Resultado del Ejercicio) y se archivará.')) return;
+  
+  showToast('Cerrando año ' + año + '...', 'info');
+  google.script.run
+    .withSuccessHandler(function(r) {
+      if (r.success) {
+        showToast(r.mensaje);
+        cargarEstadoCierre();
+        cargarDatos();
+      } else { showToast(r.error, 'error'); }
+    })
+    .withFailureHandler(handleError)
+    .cerrarAñoUI(año);
+}
+
+function ejecutarAperturaAño(año) {
+  mostrarModalApertura(año, 'apertura');
+}
+
+function ejecutarReabrirAño(año) {
+  if (!confirm('¿Reabrir el año ' + año + '?\n\nSe anulará el comprobante de cierre y el año volverá a estado ABIERTO.\nPodrá hacer correcciones y luego cerrar nuevamente.')) return;
+  
+  showToast('Reabriendo año ' + año + '...', 'info');
+  google.script.run
+    .withSuccessHandler(function(r) {
+      if (r.success) {
+        showToast(r.mensaje);
+        cargarEstadoCierre();
+        cargarDatos();
+      } else { showToast(r.error, 'error'); }
+    })
+    .withFailureHandler(handleError)
+    .reabrirAñoUI(año);
+}
+
+function ejecutarReApertura(año) {
+  mostrarModalApertura(año, 'reapertura');
+}
+
+function mostrarModalApertura(año, modo) {
+  // Crear modal
+  var overlay = document.createElement('div');
+  overlay.id = 'modalAperturaOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  
+  var titulo = modo === 'apertura' ? 'Abrir Año ' + año : 'Recalcular Apertura ' + año;
+  var desc = modo === 'apertura'
+    ? 'Se creará el comprobante de apertura con los saldos del año ' + (año - 1) + '.<br>La utilidad/pérdida se traspasará a la cuenta seleccionada.'
+    : 'Se anulará la apertura actual y se generará una nueva con saldos actualizados del año ' + (año - 1) + '.<br>Los movimientos del ' + año + ' NO se tocan.';
+  
+  var html = '<div style="background:white;border-radius:12px;padding:24px;width:480px;max-width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3)">'
+    + '<h3 style="margin:0 0 12px 0">' + titulo + '</h3>'
+    + '<p style="color:#64748b;font-size:13px;margin:0 0 16px 0">' + desc + '</p>'
+    + '<label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px">Cuenta Resultados Acumulados:</label>'
+    + '<select id="selCuentaAcumulados" class="form-control" style="width:100%;margin-bottom:20px">';
+  
+  // Llenar con todas las cuentas de movimiento
+  if (cuentasMovimiento && cuentasMovimiento.length > 0) {
+    for (var i = 0; i < cuentasMovimiento.length; i++) {
+      var c = cuentasMovimiento[i];
+      var sel = (c.codigo === _ciereDefaultAcumulados) ? ' selected' : '';
+      html += '<option value="' + c.codigo + '"' + sel + '>' + c.codigo + ' - ' + c.nombre + '</option>';
+    }
+  }
+  
+  html += '</select>'
+    + '<div style="display:flex;gap:10px;justify-content:flex-end">'
+    + '<button class="btn btn-secondary" onclick="cerrarModalApertura()">Cancelar</button>'
+    + '<button class="btn btn-primary" onclick="confirmarApertura(' + año + ',\'' + modo + '\')">Confirmar</button>'
+    + '</div></div>';
+  
+  overlay.innerHTML = html;
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) cerrarModalApertura(); });
+  document.body.appendChild(overlay);
+}
+
+function cerrarModalApertura() {
+  var overlay = document.getElementById('modalAperturaOverlay');
+  if (overlay) overlay.remove();
+}
+
+function confirmarApertura(año, modo) {
+  var sel = document.getElementById('selCuentaAcumulados');
+  var cuentaAcum = sel ? sel.value : '';
+  
+  if (!cuentaAcum) {
+    showToast('Seleccione la cuenta de Resultados Acumulados', 'error');
+    return;
+  }
+  
+  cerrarModalApertura();
+  
+  if (modo === 'apertura') {
+    showToast('Abriendo año ' + año + '...', 'info');
+    google.script.run
+      .withSuccessHandler(function(r) {
+        if (r.success) {
+          showToast(r.mensaje);
+          _cierreAñoSeleccionado = año;
+          cargarEstadoCierre();
+          cargarDatos();
+        } else { showToast(r.error, 'error'); }
+      })
+      .withFailureHandler(handleError)
+      .abrirAñoUI(año, cuentaAcum);
+  } else {
+    showToast('Recalculando apertura ' + año + '...', 'info');
+    google.script.run
+      .withSuccessHandler(function(r) {
+        if (r.success) {
+          showToast(r.mensaje);
+          cargarEstadoCierre();
+          cargarDatos();
+        } else { showToast(r.error, 'error'); }
+      })
+      .withFailureHandler(handleError)
+      .reAperturaUI(año, cuentaAcum);
+  }
+}
+
+function consultarArchivo(año) {
+  showToast('Consultando archivo ' + año + '...', 'info');
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      if (resultado.success) {
+        var msg = 'Archivo Año ' + año + '\n'
+          + 'Comprobantes: ' + resultado.cantidad + '\n'
+          + 'URL: ' + resultado.archivoUrl;
+        alert(msg);
+      } else {
+        showToast(resultado.error, 'error');
+      }
+    })
+    .withFailureHandler(handleError)
+    .consultarAñoArchivadoUI(año);
+}
+
+// Reportes: ver archivo reportes_js.html (incluido via include)
+
+
+// ===========================================
+// DIAGNÓSTICO
+// ===========================================
+
+function ejecutarDiagnostico() {
+  showToast('Ejecutando diagnóstico...', 'info');
+  
+  google.script.run
+    .withSuccessHandler(function(resultado) {
+      var mensaje = '=== DIAGNÓSTICO DEL SISTEMA ===\n\nHojas existentes:\n' + resultado.hojasExistentes.join(', ') + '\n\nEstado de hojas:\n';
+      
+      var faltantes = [];
+      for (var key in resultado.estadoHojas) {
+        var estado = resultado.estadoHojas[key];
+        if (estado.encontrada) {
+          mensaje += '✅ ' + key + ': ' + estado.nombre + ' (' + estado.filas + ' filas)\n';
+        } else {
+          mensaje += '❌ ' + key + ': NO ENCONTRADA (buscaba: ' + estado.nombreBuscado + ')\n';
+          faltantes.push(estado.nombreBuscado);
+        }
+      }
+      mensaje += '\nConfig existe: ' + (resultado.configExiste ? 'SÍ' : 'NO');
+      alert(mensaje);
+      
+      if (faltantes.length > 0) {
+        showToast('Faltan hojas: ' + faltantes.join(', '), 'error');
+      } else {
+        showToast('Todas las hojas encontradas', 'success');
+        cargarDatos();
+      }
+    })
+    .withFailureHandler(function(error) {
+      alert('Error en diagnóstico: ' + error.message);
+    })
+    .diagnosticarSistema();
+}
+
+// ===========================================
+// UTILIDADES
+// ===========================================
+
+function abrirModal(id) { document.getElementById(id).classList.add('active'); }
+function cerrarModal(id) { document.getElementById(id).classList.remove('active'); }
+
+function formatMoney(num) {
+  if (num === null || num === undefined) return '$0';
+  return '$' + Math.round(num).toLocaleString('es-CL');
+}
+
+function formatDate(fecha) {
+  if (!fecha) return '';
+  var d = new Date(fecha);
+  return d.toLocaleDateString('es-CL');
+}
+
+function truncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.substring(0, len) + '...' : str;
+}
+
+function getNombreMes(mes) {
+  var meses = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  return meses[mes] || '';
+}
+
+function showToast(mensaje, tipo) {
+  tipo = tipo || 'success';
+  var toast = document.getElementById('toast');
+  toast.textContent = mensaje;
+  toast.className = 'toast show ' + tipo;
+  setTimeout(function() { toast.classList.remove('show'); }, 3000);
+}
+
+function handleError(error) {
+  console.error(error);
+  showToast('Error: ' + error.message, 'error');
+}
+
+// Cerrar modales con ESC
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal.active').forEach(function(m) { m.classList.remove('active'); });
+  }
+});
+</script>
