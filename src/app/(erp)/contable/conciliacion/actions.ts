@@ -133,7 +133,7 @@ export type ContabilizarInput = {
 export async function contabilizarMovimiento(input: ContabilizarInput) {
   const supabase = await createClient();
   const config = await getConfig();
-  const ctaBanco = config.CUENTA_BANCO || "1-1-01-010";
+  const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
 
   // Leer movimiento
   const { data: mov } = await supabase

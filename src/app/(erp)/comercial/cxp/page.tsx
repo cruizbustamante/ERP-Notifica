@@ -11,7 +11,7 @@ export default async function CuentasPorPagarPage() {
 
   const configMap: Record<string, string> = {};
   for (const c of config || []) configMap[c.clave] = c.valor;
-  const ctaCxP = configMap.CUENTA_PROVEEDORES || "2-1-03-001";
+  const ctaCxP = configMap.CUENTA_PROVEEDORES || "2-1-02-001";
 
   const { data: movs } = await supabase
     .from("mov_contables")

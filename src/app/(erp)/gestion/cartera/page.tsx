@@ -109,7 +109,7 @@ export default async function CarteraPage() {
   for (const c of config || []) configMap[c.clave] = c.valor;
 
   const ctaCxC = configMap.CUENTA_CLIENTES || "1-1-03-001";
-  const ctaCxP = configMap.CUENTA_PROVEEDORES || "2-1-03-001";
+  const ctaCxP = configMap.CUENTA_PROVEEDORES || "2-1-02-001";
 
   const auxiliaresMap = new Map<string, string>();
   for (const a of auxiliares || []) auxiliaresMap.set(a.rut, a.razon_social);

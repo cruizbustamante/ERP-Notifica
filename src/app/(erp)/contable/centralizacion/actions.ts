@@ -327,7 +327,7 @@ export async function anularCentralizacion(centralizacionId: number) {
 
 function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: Record<string, string>) {
   const ctaClientes = config.CUENTA_CLIENTES || "1-1-03-001";
-  const ctaIVADebito = config.CUENTA_IVA_DEBITO || "2-1-05-001";
+  const ctaIVADebito = config.CUENTA_IVA_DEBITO || "2-1-06-001";
   const ctaVentas = cuentaVentas || config.CUENTA_VENTAS || "4-1-01-001";
 
   type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
@@ -390,9 +390,9 @@ function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: R
 }
 
 function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: Record<string, string>) {
-  const ctaProveedores = config.CUENTA_PROVEEDORES || "2-1-03-001";
-  const ctaIVACredito = config.CUENTA_IVA_CREDITO || "1-1-07-001";
-  const ctaGasto = cuentaGasto || config.CUENTA_GASTOS || "7-1-01-001";
+  const ctaProveedores = config.CUENTA_PROVEEDORES || "2-1-02-001";
+  const ctaIVACredito = config.CUENTA_IVA_CREDITO || "1-1-07-002";
+  const ctaGasto = cuentaGasto || config.CUENTA_GASTOS || "5-1-01-001";
 
   type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
   const lineas: Linea[] = [];
