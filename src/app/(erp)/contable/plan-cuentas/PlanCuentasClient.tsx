@@ -185,46 +185,46 @@ export default function PlanCuentasClient({ cuentas }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 sm:space-y-4 max-w-full overflow-hidden">
       {/* Header */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 lg:p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h1 className="text-xl lg:text-2xl font-bold text-gray-900">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4 lg:p-6">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900">
               Plan de Cuentas
             </h1>
-            <p className="text-gray-500 text-sm mt-1">
-              Estructura contable jer&aacute;rquica X-X-XX-XXX
+            <p className="text-gray-500 text-xs sm:text-sm mt-0.5">
+              Estructura contable X-X-XX-XXX
             </p>
           </div>
           <button
             onClick={handleNew}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition shrink-0"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-medium px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg transition shrink-0"
           >
-            + Nueva Cuenta
+            + Nueva
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 mt-4">
-          <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <div className="text-lg font-bold text-gray-900">{stats.total}</div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 mt-4">
+          <div className="bg-gray-50 rounded-lg p-2 sm:p-3 text-center">
+            <div className="text-base sm:text-lg font-bold text-gray-900">{stats.total}</div>
+            <div className="text-[10px] sm:text-[11px] text-gray-500 uppercase tracking-wide">
               Total
             </div>
           </div>
-          <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <div className="text-lg font-bold text-indigo-600">
+          <div className="bg-gray-50 rounded-lg p-2 sm:p-3 text-center">
+            <div className="text-base sm:text-lg font-bold text-indigo-600">
               {stats.movimiento}
             </div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
-              Movimiento
+            <div className="text-[10px] sm:text-[11px] text-gray-500 uppercase tracking-wide">
+              Movim.
             </div>
           </div>
-          <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <div className="text-lg font-bold text-green-600">
+          <div className="bg-gray-50 rounded-lg p-2 sm:p-3 text-center">
+            <div className="text-base sm:text-lg font-bold text-green-600">
               {stats.activas}
             </div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">
+            <div className="text-[10px] sm:text-[11px] text-gray-500 uppercase tracking-wide">
               Activas
             </div>
           </div>
@@ -232,22 +232,22 @@ export default function PlanCuentasClient({ cuentas }: Props) {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-        <div className="flex flex-col sm:flex-row gap-3">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
+        <div className="space-y-2 sm:space-y-0 sm:flex sm:flex-row sm:gap-3">
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por código o nombre..."
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-gray-900"
+            className="w-full sm:flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-gray-900"
           />
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
             <select
               value={filterTipo}
               onChange={(e) => setFilterTipo(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+              className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-2 focus:ring-indigo-500 outline-none"
             >
-              <option value="all">Todos</option>
+              <option value="all">Tipo</option>
               <option value="A">Activo</option>
               <option value="P">Pasivo</option>
               <option value="T">Patrimonio</option>
@@ -257,9 +257,9 @@ export default function PlanCuentasClient({ cuentas }: Props) {
             <select
               value={filterEstado}
               onChange={(e) => setFilterEstado(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+              className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-2 focus:ring-indigo-500 outline-none"
             >
-              <option value="all">Todas</option>
+              <option value="all">Estado</option>
               <option value="S">Activas</option>
               <option value="N">Inactivas</option>
             </select>
@@ -479,80 +479,80 @@ function TreeNode({
 
       {/* Mobile row */}
       <div
-        className={`lg:hidden px-3 py-2.5 ${levelBg} ${
+        className={`lg:hidden px-2 py-2 ${levelBg} ${
           node.estado === "N" ? "opacity-40" : ""
         } ${hasChildren ? "active:bg-gray-100" : ""}`}
         onClick={hasChildren ? () => toggleExpand(node.codigo) : undefined}
       >
         <div
-          className="flex items-start gap-2"
-          style={{ paddingLeft: depth * 14 }}
+          className="flex items-start gap-1.5"
+          style={{ paddingLeft: depth * 12 }}
         >
           {hasChildren ? (
-            <span className="text-[10px] text-gray-400 mt-1 w-4 shrink-0">
+            <span className="text-[9px] text-gray-400 mt-1 w-3 shrink-0">
               {isExpanded ? "▼" : "▶"}
             </span>
           ) : (
-            <span className="w-4 shrink-0" />
+            <span className="w-3 shrink-0" />
           )}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[11px] text-gray-400">
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-[10px] text-gray-400">
                 {node.codigo}
               </span>
               <span
-                className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${tipoInfo.color}`}
+                className={`text-[8px] px-1 py-0.5 rounded font-medium ${tipoInfo.color}`}
               >
                 {node.tipo}
               </span>
             </div>
             <div
-              className={`text-sm mt-0.5 ${
+              className={`text-[13px] leading-tight mt-0.5 ${
                 isHeader ? "font-semibold text-gray-900" : "text-gray-700"
               }`}
             >
               {node.nombre}
             </div>
             {isLeaf && (
-              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              <div className="flex flex-wrap items-center gap-1 mt-1">
                 {node.usa_auxiliar === "X" && (
-                  <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
-                    Auxiliar
+                  <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-medium">
+                    Aux
                   </span>
                 )}
                 {node.usa_documento === "X" && (
-                  <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
-                    Documento
+                  <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-medium">
+                    Doc
                   </span>
                 )}
                 {node.conciliable === "X" && (
-                  <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-medium">
-                    Conciliable
+                  <span className="text-[8px] bg-indigo-50 text-indigo-600 px-1 py-0.5 rounded font-medium">
+                    Conc
                   </span>
                 )}
                 <span
-                  className={`text-[9px] px-1.5 py-0.5 rounded ${
+                  className={`text-[8px] px-1 py-0.5 rounded ${
                     node.estado === "S"
                       ? "bg-green-50 text-green-600"
                       : "bg-gray-100 text-gray-500"
                   }`}
                 >
-                  {node.estado === "S" ? "Activa" : "Inactiva"}
+                  {node.estado === "S" ? "Activa" : "Inact."}
                 </span>
               </div>
             )}
           </div>
           {isLeaf && (
             <div
-              className="flex gap-0.5 shrink-0"
+              className="shrink-0 ml-1"
               onClick={(e) => e.stopPropagation()}
             >
               <button
                 onClick={() => onEdit(node)}
-                className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition"
               >
                 <svg
-                  className="w-4 h-4"
+                  className="w-3.5 h-3.5"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -562,29 +562,6 @@ function TreeNode({
                     strokeLinejoin="round"
                     strokeWidth={2}
                     d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                  />
-                </svg>
-              </button>
-              <button
-                onClick={() => onToggleEstado(node)}
-                disabled={isPending}
-                className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg transition disabled:opacity-50"
-              >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d={
-                      node.estado === "S"
-                        ? "M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
-                        : "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                    }
                   />
                 </svg>
               </button>
