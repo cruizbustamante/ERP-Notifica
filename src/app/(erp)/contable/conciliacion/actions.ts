@@ -279,7 +279,7 @@ export async function cargarCartolaSantander(movimientos: Array<{
   const { createHash } = await import("crypto");
 
   const records = movimientos.map((m) => {
-    const huellaStr = `${m.monto}|${m.descripcion}|${m.fecha}|${m.num_doc}|${m.cargo_abono}`;
+    const huellaStr = `${m.monto}|${m.descripcion}|${m.fecha}|${m.num_doc}|${m.cargo_abono}|${m.saldo}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
     const [year, month] = m.fecha.split("-").map(Number);
     return {
