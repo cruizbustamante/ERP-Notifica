@@ -1,10 +1,16 @@
-export default function LibrosTributariosPage() {
+import { createClient } from "@/lib/supabase/server";
+import LibrosTributariosClient from "./LibrosTributariosClient";
+
+export default async function LibrosTributariosPage() {
+  const supabase = await createClient();
+  const currentYear = new Date().getFullYear();
+
+  const { data: periodos } = await supabase
+    .from("periodos")
+    .select("anio, estado")
+    .order("anio", { ascending: false });
+
   return (
-    <div className="space-y-0">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Libros Tributarios</h1>
-        <p className="text-gray-500 mt-2">Libro de ventas, compras y honorarios</p>
-      </div>
-    </div>
+    <LibrosTributariosClient periodos={periodos || []} currentYear={currentYear} />
   );
 }

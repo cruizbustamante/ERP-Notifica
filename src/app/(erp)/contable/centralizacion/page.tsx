@@ -1,10 +1,38 @@
-export default function CentralizacionPage() {
+import { createClient } from "@/lib/supabase/server";
+import CentralizacionClient from "./CentralizacionClient";
+
+export default async function CentralizacionPage() {
+  const supabase = await createClient();
+  const currentYear = new Date().getFullYear();
+
+  const [{ data: periodos }, { data: cuentasVentas }, { data: cuentasGastos }] =
+    await Promise.all([
+      supabase
+        .from("periodos")
+        .select("anio, estado")
+        .order("anio", { ascending: false }),
+      supabase
+        .from("plan_cuentas")
+        .select("codigo, nombre")
+        .eq("nivel", 4)
+        .eq("estado", "S")
+        .eq("tipo", "I")
+        .order("codigo"),
+      supabase
+        .from("plan_cuentas")
+        .select("codigo, nombre")
+        .eq("nivel", 4)
+        .eq("estado", "S")
+        .eq("tipo", "G")
+        .order("codigo"),
+    ]);
+
   return (
-    <div className="space-y-0">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Centralización</h1>
-        <p className="text-gray-500 mt-2">Centralización de documentos tributarios SII</p>
-      </div>
-    </div>
+    <CentralizacionClient
+      periodos={periodos || []}
+      cuentasVentas={cuentasVentas || []}
+      cuentasGastos={cuentasGastos || []}
+      currentYear={currentYear}
+    />
   );
 }

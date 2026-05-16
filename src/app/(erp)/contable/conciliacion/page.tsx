@@ -1,10 +1,35 @@
-export default function ConciliacionPage() {
+import { createClient } from "@/lib/supabase/server";
+import ConciliacionClient from "./ConciliacionClient";
+
+export default async function ConciliacionPage() {
+  const supabase = await createClient();
+  const currentYear = new Date().getFullYear();
+
+  const [{ data: periodos }, { data: cuentas }, { data: auxiliares }] =
+    await Promise.all([
+      supabase
+        .from("periodos")
+        .select("anio, estado")
+        .order("anio", { ascending: false }),
+      supabase
+        .from("plan_cuentas")
+        .select("codigo, nombre, tipo, usa_auxiliar, usa_documento")
+        .eq("nivel", 4)
+        .eq("estado", "S")
+        .order("codigo"),
+      supabase
+        .from("auxiliares")
+        .select("rut, razon_social")
+        .eq("estado", "S")
+        .order("razon_social"),
+    ]);
+
   return (
-    <div className="space-y-0">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Conciliación Bancaria</h1>
-        <p className="text-gray-500 mt-2">Conciliación de cartola con movimientos contables</p>
-      </div>
-    </div>
+    <ConciliacionClient
+      periodos={periodos || []}
+      cuentas={cuentas || []}
+      auxiliares={auxiliares || []}
+      currentYear={currentYear}
+    />
   );
 }

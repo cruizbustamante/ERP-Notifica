@@ -1,10 +1,28 @@
-export default function LibroMayorPage() {
+import { createClient } from "@/lib/supabase/server";
+import LibroMayorClient from "./LibroMayorClient";
+
+export default async function LibroMayorPage() {
+  const supabase = await createClient();
+  const currentYear = new Date().getFullYear();
+
+  const [{ data: periodos }, { data: cuentas }] = await Promise.all([
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
+    supabase
+      .from("plan_cuentas")
+      .select("codigo, nombre, tipo")
+      .eq("nivel", 4)
+      .eq("estado", "S")
+      .order("codigo"),
+  ]);
+
   return (
-    <div className="space-y-0">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Libro Mayor</h1>
-        <p className="text-gray-500 mt-2">Movimientos por cuenta contable</p>
-      </div>
-    </div>
+    <LibroMayorClient
+      periodos={periodos || []}
+      cuentas={cuentas || []}
+      currentYear={currentYear}
+    />
   );
 }
