@@ -22,19 +22,19 @@ export async function getResumenCartola(anio: number) {
     .select("mes, monto, tipo, contabilizado, cargo_abono")
     .eq("anio", anio);
 
-  type MesData = { abonos: number; cargos: number; cantPend: number; cantContab: number };
+  type MesData = { abonos: number; cargos: number; pend: number; cont: number };
   const porMes: Record<number, MesData> = {};
-  for (let m = 1; m <= 12; m++) porMes[m] = { abonos: 0, cargos: 0, cantPend: 0, cantContab: 0 };
+  for (let m = 1; m <= 12; m++) porMes[m] = { abonos: 0, cargos: 0, pend: 0, cont: 0 };
 
   for (const r of data || []) {
     const m = r.mes;
     if (!m || m < 1 || m > 12) continue;
     const monto = Math.abs(Number(r.monto) || 0);
     if (r.contabilizado) {
-      porMes[m].cantContab++;
+      porMes[m].cont++;
     } else {
-      porMes[m].cantPend++;
-      if (r.tipo === "ABONO" || r.cargo_abono === "ABONO") porMes[m].abonos += monto;
+      porMes[m].pend++;
+      if (r.cargo_abono === "A" || r.tipo === "ABONO") porMes[m].abonos += monto;
       else porMes[m].cargos += monto;
     }
   }
@@ -146,7 +146,7 @@ export async function contabilizarMovimiento(input: ContabilizarInput) {
   if (mov.contabilizado) return { error: "Ya está contabilizado" };
 
   const monto = Math.abs(Number(mov.monto) || 0);
-  const esAbono = (mov.tipo === "ABONO" || mov.cargo_abono === "ABONO");
+  const esAbono = (mov.cargo_abono === "A" || mov.tipo === "ABONO");
   const fecha = mov.fecha;
 
   if (monto === 0) return { error: "Monto es $0" };
@@ -257,6 +257,66 @@ export async function anularContabilizacion(cartolaId: number) {
 
   revalidatePath("/contable/conciliacion");
   return { error: null };
+}
+
+// ─── Cargar cartola desde Excel ─────────────────────────────────────────
+
+export async function cargarCartolaSantander(movimientos: Array<{
+  monto: number;
+  descripcion: string;
+  fecha: string;
+  saldo: number;
+  num_doc: string;
+  sucursal: string;
+  cargo_abono: string;
+}>) {
+  const supabase = await createClient();
+  const errores: string[] = [];
+  let nuevos = 0;
+  let duplicados = 0;
+
+  // Generate MD5 huellas and prepare records
+  const { createHash } = await import("crypto");
+
+  const records = movimientos.map((m) => {
+    const huellaStr = `${m.monto}|${m.descripcion}|${m.fecha}|${m.num_doc}|${m.cargo_abono}`;
+    const huella = createHash("md5").update(huellaStr).digest("hex");
+    const [year, month] = m.fecha.split("-").map(Number);
+    return {
+      cuenta_banco: "CTE-SANTANDER",
+      fecha: m.fecha,
+      descripcion: m.descripcion,
+      monto: m.monto,
+      saldo: m.saldo,
+      num_doc: m.num_doc,
+      sucursal: m.sucursal,
+      cargo_abono: m.cargo_abono,
+      huella,
+      anio: year,
+      mes: month,
+      contabilizado: false,
+      estado_conciliacion: "PENDIENTE",
+    };
+  });
+
+  // Insert in batches of 50
+  for (let i = 0; i < records.length; i += 50) {
+    const batch = records.slice(i, i + 50);
+    const { data, error } = await supabase
+      .from("cartolas")
+      .upsert(batch, { onConflict: "huella", ignoreDuplicates: true })
+      .select("id");
+
+    if (error) {
+      errores.push(`Lote ${Math.floor(i / 50) + 1}: ${error.message}`);
+    } else {
+      nuevos += data?.length || 0;
+    }
+    duplicados += batch.length - (data?.length || 0);
+  }
+
+  revalidatePath("/contable/conciliacion");
+  return { nuevos, duplicados, errores };
 }
 
 // ─── Documentos pendientes para un auxiliar ─────────────────────────────
