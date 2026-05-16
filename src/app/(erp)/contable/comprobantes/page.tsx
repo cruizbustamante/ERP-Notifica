@@ -1,10 +1,26 @@
-export default function ComprobantesPage() {
+import { createClient } from "@/lib/supabase/server";
+import ComprobantesClient from "./ComprobantesClient";
+
+export default async function ComprobantesPage() {
+  const supabase = await createClient();
+
+  const currentYear = new Date().getFullYear();
+
+  const [{ data: comprobantes }, { data: periodos }] = await Promise.all([
+    supabase
+      .from("comprobantes")
+      .select("*, mov_contables(debe, haber)")
+      .eq("anio", currentYear)
+      .order("fecha", { ascending: false })
+      .order("numero", { ascending: false }),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
+  ]);
+
   return (
-    <div className="space-y-0">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Comprobantes</h1>
-        <p className="text-gray-500 mt-2">Ingreso, egreso y traspaso de comprobantes contables</p>
-      </div>
-    </div>
+    <ComprobantesClient
+      initialData={comprobantes || []}
+      periodos={periodos || []}
+      currentYear={currentYear}
+    />
   );
 }
