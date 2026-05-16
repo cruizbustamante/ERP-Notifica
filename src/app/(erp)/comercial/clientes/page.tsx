@@ -5,7 +5,7 @@ export default async function ClientesPage() {
   const supabase = await createClient();
   const anio = new Date().getFullYear();
 
-  const [{ data: auxiliares }, { data: ventas }, { data: movsCxC }] = await Promise.all([
+  const [{ data: auxiliares }, { data: ventas }, { data: movsCxC }, { data: fichas }] = await Promise.all([
     supabase.from("auxiliares").select("*").eq("estado", "S").order("razon_social"),
     supabase.from("ventas_sii").select("rut_receptor, monto_total, folio, fecha_emision, tipo_dte").eq("anio", anio),
     supabase
@@ -14,9 +14,9 @@ export default async function ClientesPage() {
       .eq("cuenta_codigo", "1-1-03-001")
       .eq("comprobantes.estado", "VIGENTE")
       .neq("tipo_doc", ""),
+    supabase.from("ficha_comercial").select("*"),
   ]);
 
-  // Ventas por cliente
   const ventasMap = new Map<string, { total: number; cant: number; ultima: string | null }>();
   for (const v of ventas || []) {
     const rut = v.rut_receptor;
@@ -30,17 +30,12 @@ export default async function ClientesPage() {
     ventasMap.set(rut, existing);
   }
 
-  // Saldo pendiente CxC por auxiliar
   const saldoCxC = new Map<string, number>();
   for (const m of movsCxC || []) {
     const rut = m.auxiliar_rut || "";
     if (!rut) continue;
-    const docKey = `${rut}|${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia ? `${rut}|${m.referencia}` : docKey;
-    const isReg = !m.referencia || m.referencia === `${m.tipo_doc}|${m.num_doc}`;
     const monto = (Number(m.debe) || 0) - (Number(m.haber) || 0);
-    const key = isReg ? rut : rut;
-    saldoCxC.set(key, (saldoCxC.get(key) || 0) + monto);
+    saldoCxC.set(rut, (saldoCxC.get(rut) || 0) + monto);
   }
 
   const clientes = (auxiliares || []).map((a) => {
@@ -60,13 +55,29 @@ export default async function ClientesPage() {
     };
   });
 
-  const conVentas = clientes.filter((c) => c.totalVentas > 0 || c.cantDocs > 0);
-  const totalVentasGlobal = conVentas.reduce((s, c) => s + c.totalVentas, 0);
+  const totalVentasGlobal = clientes.reduce((s, c) => s + c.totalVentas, 0);
   const clientesConDeuda = clientes.filter((c) => c.saldoPendiente > 0).length;
+
+  const fichasNormalized = (fichas || []).map((f) => ({
+    rut: f.rut,
+    razon_social: f.razon_social || "",
+    email: f.email || "",
+    giro: f.giro || "",
+    direccion: f.direccion || "",
+    telefono: f.telefono || "",
+    facturacion_tipo: f.facturacion_tipo || "",
+    tipo_doc: f.tipo_doc || "",
+    plan: f.plan || "",
+    valor_plan: Number(f.valor_plan) || 0,
+    fecha_inicio: f.fecha_inicio || "",
+    estado: f.estado || "",
+    notas: f.notas || "",
+  }));
 
   return (
     <ClientesClient
       clientes={clientes}
+      fichas={fichasNormalized}
       totalClientes={clientes.length}
       totalVentasGlobal={totalVentasGlobal}
       clientesConDeuda={clientesConDeuda}
