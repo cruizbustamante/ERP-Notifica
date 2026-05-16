@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import Navbar from "@/components/Navbar";
+import Sidebar from "@/components/Sidebar";
+import Topbar from "@/components/Topbar";
 
 export default async function ErpLayout({
   children,
@@ -18,10 +19,15 @@ export default async function ErpLayout({
     .eq("user_id", user.id)
     .single();
 
+  const userData = userRole || { email: user.email || "", rol: "consulta", nombre: "" };
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar user={userRole || { email: user.email || "", rol: "consulta", nombre: "" }} />
-      <main className="p-6">{children}</main>
+      <Sidebar user={userData} />
+      <div className="ml-64 transition-all duration-300">
+        <Topbar user={userData} />
+        <main className="p-6">{children}</main>
+      </div>
     </div>
   );
 }
