@@ -11,6 +11,7 @@ type Props = {
     cartolaPendiente: number;
     ventasPendiente: number;
     comprasPendiente: number;
+    saldoCtaCte: number;
   };
 };
 
@@ -34,7 +35,18 @@ export default function CommandCenter({ anio, stats }: Props) {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="kpi-card bg-white rounded-xl border border-gray-200 p-5 border-l-4 border-l-indigo-600 col-span-2 sm:col-span-1">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center text-lg">🏦</div>
+            <div>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Saldo Cta. Cte.</p>
+              <p className="text-xl font-bold text-[#1e1b4b]">${stats.saldoCtaCte.toLocaleString("es-CL")}</p>
+              <p className="text-[11px] text-gray-400">Banco Santander</p>
+            </div>
+          </div>
+        </div>
+
         <div className="kpi-card bg-white rounded-xl border border-gray-200 p-5 border-l-4 border-l-blue-500">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-lg">📋</div>
