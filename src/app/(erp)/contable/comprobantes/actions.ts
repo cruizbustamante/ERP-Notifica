@@ -211,14 +211,14 @@ export async function crearComprobante(data: {
 
   if (compErr) return { error: compErr.message };
 
-  // 10. Insertar movimientos
+  // 10. Insertar movimientos (glosa línea hereda de cabecera si vacía)
   const lineas = data.lineas.map((l, i) => ({
     comprobante_id: comp.id,
     linea: i + 1,
     cuenta_codigo: l.cuenta_codigo,
     debe: l.debe,
     haber: l.haber,
-    glosa: l.glosa,
+    glosa: l.glosa || data.glosa,
     auxiliar_rut: l.auxiliar_rut,
     tipo_doc: l.tipo_doc,
     num_doc: l.num_doc,
