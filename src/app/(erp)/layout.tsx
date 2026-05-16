@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import Sidebar from "@/components/Sidebar";
-import Topbar from "@/components/Topbar";
+import LayoutShell from "@/components/LayoutShell";
 
 export default async function ErpLayout({
   children,
@@ -9,7 +8,9 @@ export default async function ErpLayout({
   children: React.ReactNode;
 }) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
 
@@ -19,15 +20,11 @@ export default async function ErpLayout({
     .eq("user_id", user.id)
     .single();
 
-  const userData = userRole || { email: user.email || "", rol: "consulta", nombre: "" };
+  const userData = userRole || {
+    email: user.email || "",
+    rol: "consulta",
+    nombre: "",
+  };
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <Sidebar user={userData} />
-      <div className="ml-64 transition-all duration-300">
-        <Topbar user={userData} />
-        <main className="p-6">{children}</main>
-      </div>
-    </div>
-  );
+  return <LayoutShell user={userData}>{children}</LayoutShell>;
 }
