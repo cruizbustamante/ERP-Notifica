@@ -24,14 +24,29 @@ const NAV_SECTIONS = [
     icon: "📋",
     href: "/contable/comprobantes",
     segment: "contable",
+    matchPaths: ["/contable/comprobantes", "/contable/centralizacion", "/contable/conciliacion", "/contable/plan-cuentas", "/contable/cierre"],
     children: [
       { label: "Comprobantes", href: "/contable/comprobantes" },
       { label: "Centralización", href: "/contable/centralizacion" },
       { label: "Conciliación", href: "/contable/conciliacion" },
-      { label: "Libro Mayor", href: "/contable/libro-mayor" },
-      { label: "Balance", href: "/contable/balance" },
       { label: "Plan de Cuentas", href: "/contable/plan-cuentas" },
       { label: "Cierre Anual", href: "/contable/cierre" },
+    ],
+  },
+  {
+    label: "Informes",
+    icon: "📄",
+    href: "/contable/libros-tributarios",
+    segment: "informes",
+    matchPaths: ["/contable/libros-tributarios", "/contable/libro-diario", "/contable/libro-mayor", "/contable/balance", "/gestion/estado-resultados", "/gestion/situacion-financiera", "/gestion/flujo-efectivo"],
+    children: [
+      { label: "Libros Tributarios", href: "/contable/libros-tributarios" },
+      { label: "Libro Diario", href: "/contable/libro-diario" },
+      { label: "Libro Mayor", href: "/contable/libro-mayor" },
+      { label: "Balance 8 Columnas", href: "/contable/balance" },
+      { label: "Estado de Resultados", href: "/gestion/estado-resultados" },
+      { label: "Situación Financiera", href: "/gestion/situacion-financiera" },
+      { label: "Flujo de Efectivo", href: "/gestion/flujo-efectivo" },
     ],
   },
   {
@@ -54,11 +69,9 @@ const NAV_SECTIONS = [
     icon: "📈",
     href: "/gestion/dashboard",
     segment: "gestion",
+    matchPaths: ["/gestion/dashboard", "/gestion/indicadores", "/gestion/rentabilidad", "/gestion/cartera"],
     children: [
       { label: "Dashboard", href: "/gestion/dashboard" },
-      { label: "Estado Resultados", href: "/gestion/estado-resultados" },
-      { label: "Situación Financiera", href: "/gestion/situacion-financiera" },
-      { label: "Flujo Efectivo", href: "/gestion/flujo-efectivo" },
       { label: "Indicadores", href: "/gestion/indicadores" },
       { label: "Rentabilidad", href: "/gestion/rentabilidad" },
       { label: "Cartera", href: "/gestion/cartera" },
@@ -86,7 +99,17 @@ export default function LayoutShell({ user, children }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
-  const activeSegment = pathname.split("/")[1] || "";
+  const getActiveSection = (path: string) => {
+    for (const s of NAV_SECTIONS) {
+      if ((s as { matchPaths?: string[] }).matchPaths) {
+        if ((s as { matchPaths: string[] }).matchPaths.some((p) => path.startsWith(p))) return s.segment;
+      } else if (s.segment && path.startsWith("/" + s.segment)) {
+        return s.segment;
+      }
+    }
+    return "";
+  };
+  const activeSegment = getActiveSection(pathname);
 
   useEffect(() => {
     const section = NAV_SECTIONS.find((s) => s.segment === activeSegment);

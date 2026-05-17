@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { formatMonto, MESES, TIPOS_COMPROBANTE } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import { getLibroDiario, type ComprobanteConLineas } from "./actions";
+import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
 
 type Periodo = { anio: number; estado: string };
 
@@ -46,25 +47,76 @@ export default function LibroDiarioClient({
   const totalDebe = data.reduce((sum, c) => sum + c.lineas.reduce((s, l) => s + l.debe, 0), 0);
   const totalHaber = data.reduce((sum, c) => sum + c.lineas.reduce((s, l) => s + l.haber, 0), 0);
 
+  const right: { horizontal: "right"; vertical: "middle" } = { horizontal: "right", vertical: "middle" };
+
+  const descargarExcel = async () => {
+    const periodo = mes ? `${MESES[mes]} ${anio}` : `Enero a Diciembre ${anio}`;
+    const rows: Record<string, unknown>[] = [];
+
+    for (const c of data) {
+      const tipoInfo = TIPOS_COMPROBANTE[c.tipo];
+      for (const l of c.lineas) {
+        rows.push({
+          fecha: c.fecha,
+          comprobante: `${tipoInfo?.short || c.tipo}-${c.numero}`,
+          cuenta: l.cuenta_codigo,
+          nombre: l.cuenta_nombre,
+          glosa: l.glosa || c.glosa,
+          auxiliar: l.auxiliar_rut || "",
+          documento: l.tipo_doc ? `${l.tipo_doc} ${l.num_doc}` : "",
+          debe: l.debe || "",
+          haber: l.haber || "",
+        });
+      }
+    }
+
+    const wb = crearLibroCorporativo({
+      titulo: "LIBRO DIARIO",
+      periodo,
+      hoja: "Libro Diario",
+      columnas: [
+        { key: "fecha", header: "Fecha", width: 12 },
+        { key: "comprobante", header: "Comp.", width: 12 },
+        { key: "cuenta", header: "Cuenta", width: 14 },
+        { key: "nombre", header: "Nombre Cuenta", width: 28 },
+        { key: "glosa", header: "Glosa", width: 25 },
+        { key: "auxiliar", header: "Auxiliar", width: 14 },
+        { key: "documento", header: "Documento", width: 14 },
+        { key: "debe", header: "Debe", width: 16, numFmt: "#,##0", alignment: right },
+        { key: "haber", header: "Haber", width: 16, numFmt: "#,##0", alignment: right },
+      ],
+      datos: rows,
+      totales: { fecha: `TOTALES (${data.length} comp.)`, debe: totalDebe, haber: totalHaber },
+    });
+
+    const mesStr = mes ? String(mes).padStart(2, "0") : "01-12";
+    await descargarWorkbook(wb, `Libro_Diario_${anio}_${mesStr}.xlsx`);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center justify-between">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Libro Diario</h1>
-            <p className="text-gray-500 mt-1">Registro cronológico de comprobantes</p>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Libro Diario</h1>
+            <p className="text-gray-500 mt-1 text-sm">Registro cronologico de comprobantes</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <select value={anio} onChange={(e) => setAnio(Number(e.target.value))} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
               {periodos.map((p) => <option key={p.anio} value={p.anio}>{p.anio}</option>)}
             </select>
             <select value={mes ?? ""} onChange={(e) => setMes(e.target.value ? Number(e.target.value) : null)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-              <option value="">Todo el año</option>
+              <option value="">Todo el ano</option>
               {MESES.slice(1).map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
             </select>
             <button onClick={consultar} disabled={isPending} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
               {isPending ? "Cargando..." : "Consultar"}
             </button>
+            {loaded && data.length > 0 && (
+              <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
+                Descargar Excel
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -144,7 +196,7 @@ export default function LibroDiarioClient({
           </div>
 
           {data.length === 0 && (
-            <div className="p-8 text-center text-gray-500 text-sm">Sin comprobantes para el período seleccionado</div>
+            <div className="p-8 text-center text-gray-500 text-sm">Sin comprobantes para el periodo seleccionado</div>
           )}
         </div>
       )}

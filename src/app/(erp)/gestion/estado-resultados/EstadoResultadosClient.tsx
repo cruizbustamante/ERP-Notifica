@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
 
 type FilaEERR = { codigo: string; nombre: string; tipo: string; nivel: number; porMes: number[]; total: number };
 
@@ -15,6 +16,50 @@ export default function EstadoResultadosClient({
   const resultado = totalIngresos - totalGastos;
   const ingresosFilas = filas.filter((f) => f.tipo === "I");
   const gastosFilas = filas.filter((f) => f.tipo === "G");
+
+  const right: { horizontal: "right"; vertical: "middle" } = { horizontal: "right", vertical: "middle" };
+
+  const descargarExcel = async () => {
+    const n4 = filas.filter((f) => f.nivel === 4);
+    const rows: Record<string, unknown>[] = [];
+
+    const ingN4 = n4.filter((f) => f.tipo === "I");
+    const gasN4 = n4.filter((f) => f.tipo === "G");
+
+    rows.push({ codigo: "INGRESOS", nombre: "", ene: "", feb: "", mar: "", abr: "", may: "", jun: "", jul: "", ago: "", sep: "", oct: "", nov: "", dic: "", total: "" });
+    for (const f of ingN4) {
+      const r: Record<string, unknown> = { codigo: f.codigo, nombre: f.nombre, total: f.total };
+      MESES.slice(1).forEach((_, i) => { r[MESES[i + 1].toLowerCase().slice(0, 3)] = f.porMes[i] || ""; });
+      rows.push(r);
+    }
+
+    rows.push({ codigo: "COSTOS Y GASTOS", nombre: "", total: "" });
+    for (const f of gasN4) {
+      const r: Record<string, unknown> = { codigo: f.codigo, nombre: f.nombre, total: f.total };
+      MESES.slice(1).forEach((_, i) => { r[MESES[i + 1].toLowerCase().slice(0, 3)] = f.porMes[i] || ""; });
+      rows.push(r);
+    }
+
+    const mesCols = MESES.slice(1).map((m) => ({
+      key: m.toLowerCase().slice(0, 3), header: m.slice(0, 3), width: 11, numFmt: "#,##0", alignment: right,
+    }));
+
+    const wb = crearLibroCorporativo({
+      titulo: "ESTADO DE RESULTADOS",
+      periodo: `Enero a Diciembre ${anio}`,
+      hoja: "EE.RR",
+      columnas: [
+        { key: "codigo", header: "Codigo", width: 14 },
+        { key: "nombre", header: "Cuenta", width: 28 },
+        ...mesCols,
+        { key: "total", header: "Total", width: 16, numFmt: "#,##0", alignment: right },
+      ],
+      datos: rows,
+      totales: { codigo: "RESULTADO DEL EJERCICIO", total: resultado },
+    });
+
+    await descargarWorkbook(wb, `Estado_Resultados_${anio}.xlsx`);
+  };
 
   const Section = ({ titulo, items, totalLabel, total, colorTotal }: {
     titulo: string; items: FilaEERR[]; totalLabel: string; total: number; colorTotal: string;
@@ -48,25 +93,31 @@ export default function EstadoResultadosClient({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Estado de Resultados</h1>
-        <p className="text-gray-500 mt-1">Enero a Diciembre {anio}</p>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Estado de Resultados</h1>
+            <p className="text-gray-500 mt-1 text-sm">Enero a Diciembre {anio}</p>
+          </div>
+          <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 self-start">
+            Descargar Excel
+          </button>
+        </div>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-sm text-gray-500">Ingresos</p>
-          <p className="text-xl font-bold font-mono text-green-600">{formatMonto(totalIngresos)}</p>
+      <div className="grid grid-cols-3 gap-3 sm:gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-gray-500">Ingresos</p>
+          <p className="text-lg sm:text-xl font-bold font-mono text-green-600">{formatMonto(totalIngresos)}</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-sm text-gray-500">Gastos</p>
-          <p className="text-xl font-bold font-mono text-red-600">{formatMonto(totalGastos)}</p>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-gray-500">Gastos</p>
+          <p className="text-lg sm:text-xl font-bold font-mono text-red-600">{formatMonto(totalGastos)}</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          <p className="text-sm text-gray-500">Resultado</p>
-          <p className={`text-xl font-bold font-mono ${resultado >= 0 ? "text-blue-600" : "text-red-600"}`}>
-            {formatMonto(resultado)} <span className="text-sm font-normal">{resultado >= 0 ? "Utilidad" : "Pérdida"}</span>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
+          <p className="text-xs sm:text-sm text-gray-500">Resultado</p>
+          <p className={`text-lg sm:text-xl font-bold font-mono ${resultado >= 0 ? "text-blue-600" : "text-red-600"}`}>
+            {formatMonto(resultado)} <span className="text-xs sm:text-sm font-normal">{resultado >= 0 ? "Utilidad" : "Perdida"}</span>
           </p>
         </div>
       </div>
