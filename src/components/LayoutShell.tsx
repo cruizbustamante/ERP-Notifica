@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -122,10 +123,8 @@ export default function LayoutShell({ user, children }: Props) {
       >
         <div className="flex flex-col h-full bg-[#1e1b8a] text-white">
           {/* Logo */}
-          <div className="flex items-center gap-3 px-5 py-5 border-b border-white/10">
-            <div className="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center backdrop-blur">
-              <span className="text-white text-sm font-bold">NL</span>
-            </div>
+          <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
+            <Image src="/icon-sidebar.png" alt="NL" width={36} height={36} className="rounded-lg" />
             <div>
               <div className="text-sm font-semibold leading-tight">Notifica Legal</div>
               <div className="text-[10px] text-white/50">ERP Contable</div>

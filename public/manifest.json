@@ -1,0 +1,21 @@
+{
+  "name": "Notifica Legal ERP",
+  "short_name": "NL ERP",
+  "description": "Sistema Contable Integrado - Notifica Legal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1b8a",
+  "theme_color": "#1e1b8a",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

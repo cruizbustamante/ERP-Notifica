@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -33,8 +34,8 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gradient-to-br from-indigo-950 to-indigo-800 flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-indigo-950">Notifica Legal</h1>
-          <p className="text-gray-500 text-sm mt-1">Sistema Contable Integrado</p>
+          <Image src="/logo-login.png" alt="Notifica Legal" width={280} height={158} className="mx-auto mb-3" priority />
+          <p className="text-gray-500 text-sm">Sistema Contable Integrado</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
