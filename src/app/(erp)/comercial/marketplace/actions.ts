@@ -185,6 +185,154 @@ export type RentabilidadPlataforma = {
   margen_pct: number;
 };
 
+export async function marcarBoletaEmitida(ids: number[], folio: string, fecha: string) {
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("marketplace_transacciones")
+    .update({ boleta_emitida: true, boleta_folio: folio, boleta_fecha: fecha })
+    .in("id", ids);
+
+  if (error) return { error: error.message };
+  revalidatePath("/comercial/marketplace");
+  return { error: null };
+}
+
+export type ResumenMensualMKT = {
+  periodo: string;
+  mes: number;
+  n_tx: number;
+  total_ventas: number;
+  base_receptores: number;
+  comision_nl_bruta: number;
+  comision_nl_neta: number;
+  iva_comision: number;
+  costo_plataforma: number;
+  margen_neto: number;
+  boletas_pendientes: number;
+};
+
+export async function getResumenMensualMKT(anio: number): Promise<{ data: ResumenMensualMKT[]; error: string | null }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("marketplace_transacciones")
+    .select("fecha_transaccion, monto_bruto, base_receptor, comision_nl_bruta, comision_nl_neta, iva_comision, costo_plataforma, costo_tbk, estado, boleta_emitida");
+
+  if (error) return { data: [], error: error.message };
+
+  const meses: Record<number, ResumenMensualMKT> = {};
+  for (let m = 1; m <= 12; m++) {
+    meses[m] = {
+      periodo: `${anio}-${String(m).padStart(2, "0")}`,
+      mes: m,
+      n_tx: 0, total_ventas: 0, base_receptores: 0,
+      comision_nl_bruta: 0, comision_nl_neta: 0, iva_comision: 0,
+      costo_plataforma: 0, margen_neto: 0, boletas_pendientes: 0,
+    };
+  }
+
+  for (const t of data || []) {
+    if (t.estado === "ANULADO") continue;
+    const fecha = new Date(t.fecha_transaccion);
+    if (fecha.getFullYear() !== anio) continue;
+    const m = fecha.getMonth() + 1;
+    const r = meses[m];
+    r.n_tx++;
+    r.total_ventas += Number(t.monto_bruto) || 0;
+    r.base_receptores += Number(t.base_receptor) || 0;
+    r.comision_nl_bruta += Number(t.comision_nl_bruta) || 0;
+    r.comision_nl_neta += Number(t.comision_nl_neta) || 0;
+    r.iva_comision += Number(t.iva_comision) || 0;
+    r.costo_plataforma += Number(t.costo_plataforma) || Number(t.costo_tbk) || 0;
+    if (!t.boleta_emitida) r.boletas_pendientes++;
+  }
+
+  for (const r of Object.values(meses)) {
+    r.margen_neto = r.comision_nl_neta - r.costo_plataforma;
+  }
+
+  return { data: Object.values(meses).filter((m) => m.n_tx > 0), error: null };
+}
+
+export type ComparativoNegocio = {
+  linea: string;
+  ingresos: number;
+  costos: number;
+  margen: number;
+  margen_pct: number;
+  transacciones: number;
+  por_mes: { mes: number; ingresos: number }[];
+};
+
+export async function getComparativoNegocios(anio: number): Promise<{ data: ComparativoNegocio[]; error: string | null }> {
+  const supabase = await createClient();
+
+  const [{ data: ventas }, { data: mkt }] = await Promise.all([
+    supabase
+      .from("ventas_sii")
+      .select("mes, monto_neto, monto_total, tipo_dte")
+      .eq("anio", anio),
+    supabase
+      .from("marketplace_transacciones")
+      .select("fecha_transaccion, comision_nl_neta, costo_plataforma, costo_tbk, estado"),
+  ]);
+
+  // Suscripciones (from ventas_sii facturas - excluyendo NC)
+  const suscPorMes: number[] = Array(12).fill(0);
+  let suscTotal = 0;
+  let suscTx = 0;
+  for (const v of ventas || []) {
+    const isNC = [61, 111].includes(v.tipo_dte);
+    const monto = Number(v.monto_neto) || 0;
+    const signo = isNC ? -1 : 1;
+    if (v.mes >= 1 && v.mes <= 12) {
+      suscPorMes[v.mes - 1] += monto * signo;
+    }
+    suscTotal += monto * signo;
+    suscTx++;
+  }
+
+  // Marketplace
+  const mktPorMes: number[] = Array(12).fill(0);
+  let mktIngresos = 0;
+  let mktCostos = 0;
+  let mktTx = 0;
+  for (const t of mkt || []) {
+    if (t.estado === "ANULADO") continue;
+    const fecha = new Date(t.fecha_transaccion);
+    if (fecha.getFullYear() !== anio) continue;
+    const m = fecha.getMonth();
+    const ingreso = Number(t.comision_nl_neta) || 0;
+    const costo = Number(t.costo_plataforma) || Number(t.costo_tbk) || 0;
+    mktPorMes[m] += ingreso;
+    mktIngresos += ingreso;
+    mktCostos += costo;
+    mktTx++;
+  }
+
+  const result: ComparativoNegocio[] = [
+    {
+      linea: "Suscripciones",
+      ingresos: suscTotal,
+      costos: 0,
+      margen: suscTotal,
+      margen_pct: 100,
+      transacciones: suscTx,
+      por_mes: suscPorMes.map((v, i) => ({ mes: i + 1, ingresos: v })),
+    },
+    {
+      linea: "Marketplace",
+      ingresos: mktIngresos,
+      costos: mktCostos,
+      margen: mktIngresos - mktCostos,
+      margen_pct: mktIngresos > 0 ? ((mktIngresos - mktCostos) / mktIngresos) * 100 : 0,
+      transacciones: mktTx,
+      por_mes: mktPorMes.map((v, i) => ({ mes: i + 1, ingresos: v })),
+    },
+  ];
+
+  return { data: result, error: null };
+}
+
 export async function getRentabilidadPorPlataforma(): Promise<{ data: RentabilidadPlataforma[]; error: string | null }> {
   const supabase = await createClient();
   const { data, error } = await supabase
