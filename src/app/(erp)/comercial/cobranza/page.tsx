@@ -3,10 +3,17 @@ import CobranzaClient from "./CobranzaClient";
 
 export default async function CobranzaPage() {
   const supabase = await createClient();
+  const anio = new Date().getFullYear();
+  const mes = new Date().getMonth() + 1;
 
-  const [{ data: config }, { data: auxiliares }] = await Promise.all([
+  const [{ data: config }, { data: auxiliares }, { data: correos }] = await Promise.all([
     supabase.from("config_contable").select("clave, valor"),
     supabase.from("auxiliares").select("rut, razon_social, email, telefono").eq("estado", "S"),
+    supabase
+      .from("correos_enviados")
+      .select("destinatario_rut, nivel, mes, anio, estado, created_at")
+      .eq("tipo", "COBRANZA")
+      .eq("anio", anio),
   ]);
 
   const configMap: Record<string, string> = {};
@@ -27,8 +34,7 @@ export default async function CobranzaPage() {
 
   const hoy = new Date();
 
-  // Calculate per-document saldos
-  type DocInfo = { saldo: number; fecha_doc: string | null; rut: string };
+  type DocInfo = { saldo: number; fecha_doc: string | null; rut: string; tipo_doc: string; num_doc: string };
   const docSaldos = new Map<string, DocInfo>();
 
   for (const m of movs || []) {
@@ -42,22 +48,24 @@ export default async function CobranzaPage() {
     if (existing) {
       existing.saldo += monto;
     } else {
-      docSaldos.set(key, { saldo: monto, fecha_doc: m.fecha_doc, rut: m.auxiliar_rut });
+      docSaldos.set(key, { saldo: monto, fecha_doc: m.fecha_doc, rut: m.auxiliar_rut, tipo_doc: m.tipo_doc || "", num_doc: m.num_doc || "" });
     }
   }
 
-  // Group by client
-  const clienteMap = new Map<string, { totalDeuda: number; docs: number; diasMax: number }>();
+  type DocPendiente = { tipoDoc: string; numDoc: string; dias: number; saldo: number };
+  const clienteMap = new Map<string, { totalDeuda: number; docs: DocPendiente[]; diasMax: number }>();
+
   for (const [, val] of docSaldos) {
-    if (Math.abs(val.saldo) < 1) continue;
+    if (val.saldo < 1) continue;
     const dias = val.fecha_doc ? Math.max(0, Math.floor((hoy.getTime() - new Date(val.fecha_doc).getTime()) / 86400000)) : 0;
     const existing = clienteMap.get(val.rut);
+    const docInfo: DocPendiente = { tipoDoc: val.tipo_doc, numDoc: val.num_doc, dias, saldo: val.saldo };
     if (existing) {
-      existing.totalDeuda += Math.abs(val.saldo);
-      existing.docs++;
+      existing.totalDeuda += val.saldo;
+      existing.docs.push(docInfo);
       existing.diasMax = Math.max(existing.diasMax, dias);
     } else {
-      clienteMap.set(val.rut, { totalDeuda: Math.abs(val.saldo), docs: 1, diasMax: dias });
+      clienteMap.set(val.rut, { totalDeuda: val.saldo, docs: [docInfo], diasMax: dias });
     }
   }
 
@@ -68,9 +76,16 @@ export default async function CobranzaPage() {
     return "JUDICIAL";
   }
 
+  const correosMap: Record<string, { nivel: string; mes: number; fecha: string }[]> = {};
+  for (const c of correos || []) {
+    if (!correosMap[c.destinatario_rut]) correosMap[c.destinatario_rut] = [];
+    correosMap[c.destinatario_rut].push({ nivel: c.nivel, mes: c.mes, fecha: c.created_at });
+  }
+
   const clientes = Array.from(clienteMap.entries())
     .map(([rut, data]) => {
       const aux = auxiliaresMap.get(rut);
+      const nivel = getNivel(data.diasMax);
       return {
         rut,
         razon_social: aux?.razon_social || rut,
@@ -78,8 +93,10 @@ export default async function CobranzaPage() {
         telefono: aux?.telefono || "",
         totalDeuda: data.totalDeuda,
         docs: data.docs,
+        cantDocs: data.docs.length,
         diasMax: data.diasMax,
-        nivel: getNivel(data.diasMax),
+        nivel,
+        correosEnviados: correosMap[rut] || [],
       };
     })
     .sort((a, b) => b.diasMax - a.diasMax);
@@ -96,6 +113,8 @@ export default async function CobranzaPage() {
       totalNormal={totalNormal}
       totalAlerta={totalAlerta}
       totalCritico={totalCritico}
+      anio={anio}
+      mes={mes}
     />
   );
 }

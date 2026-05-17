@@ -15,6 +15,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "recharts": "^3.8.1",
+    "resend": "^6.12.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
