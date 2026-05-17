@@ -16,6 +16,7 @@ import {
   cargarExcelHonorarios,
   cargarExcelTransbank,
   verificarDuplicados,
+  buscarAuxiliares,
   upsertRegla,
   deleteRegla,
   type TipoLibro,
@@ -25,6 +26,7 @@ import {
   type ReglaCentralizacion,
   type LineaPreview,
   type PreviewCarga,
+  type Auxiliar,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -66,6 +68,10 @@ export default function CentralizacionClient({
   const [reglas, setReglas] = useState<ReglaCentralizacion[]>(reglasInit);
   const [vistaReglas, setVistaReglas] = useState(false);
   const [reglaForm, setReglaForm] = useState({ rut: "", razon_social: "", cuenta_codigo: "", descripcion: "" });
+  const [auxBusqueda, setAuxBusqueda] = useState("");
+  const [auxResultados, setAuxResultados] = useState<Auxiliar[]>([]);
+  const [auxBuscando, setAuxBuscando] = useState(false);
+  const [auxDropdownOpen, setAuxDropdownOpen] = useState(false);
 
   // Upload preview modal
   const [uploadPreview, setUploadPreview] = useState<{ tipo: TipoLibro; preview: PreviewCarga; parsedData: Record<string, unknown>[]; periodoArchivo?: { anio: number; mes: number }; mesConfirmado?: number } | null>(null);
@@ -306,6 +312,27 @@ export default function CentralizacionClient({
       if (res.error) setMensaje({ tipo: "error", texto: res.error });
       else setReglas((prev) => prev.filter((r) => r.id !== id));
     });
+  };
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleAuxBusqueda = (val: string) => {
+    setAuxBusqueda(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (val.trim().length < 2) { setAuxResultados([]); setAuxDropdownOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setAuxBuscando(true);
+      const results = await buscarAuxiliares(val);
+      setAuxResultados(results);
+      setAuxDropdownOpen(results.length > 0);
+      setAuxBuscando(false);
+    }, 300);
+  };
+
+  const seleccionarAuxiliar = (aux: Auxiliar) => {
+    setReglaForm(prev => ({ ...prev, rut: aux.rut, razon_social: aux.razon_social }));
+    setAuxBusqueda("");
+    setAuxResultados([]);
+    setAuxDropdownOpen(false);
   };
 
   // ─── Computed ──────────────────────────────────────────────────────────
@@ -1203,25 +1230,52 @@ export default function CentralizacionClient({
             </div>
           </div>
 
-          <div className="flex items-end gap-2 bg-gray-50 p-3 rounded-lg flex-wrap">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">RUT</label>
-              <input value={reglaForm.rut} onChange={(e) => setReglaForm((p) => ({ ...p, rut: e.target.value }))} placeholder="12.345.678-9" className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-32" />
+          <div className="bg-gray-50 p-3 rounded-lg space-y-3">
+            <div className="relative">
+              <label className="block text-xs text-gray-500 mb-1">Buscar proveedor/cliente (RUT o nombre)</label>
+              <input
+                value={auxBusqueda || (reglaForm.rut ? `${formatRut(reglaForm.rut)} — ${reglaForm.razon_social}` : "")}
+                onChange={(e) => { handleAuxBusqueda(e.target.value); if (reglaForm.rut) setReglaForm(p => ({ ...p, rut: "", razon_social: "" })); }}
+                onFocus={() => { if (reglaForm.rut) { setAuxBusqueda(""); setReglaForm(p => ({ ...p, rut: "", razon_social: "" })); } }}
+                placeholder="Escriba RUT o nombre para buscar..."
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
+              {auxBuscando && <span className="absolute right-3 top-8 text-xs text-gray-400">Buscando...</span>}
+              {auxDropdownOpen && auxResultados.length > 0 && (
+                <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {auxResultados.map((a) => (
+                    <button
+                      key={a.rut}
+                      onClick={() => seleccionarAuxiliar(a)}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 text-sm flex items-center gap-3 border-b border-gray-100 last:border-0"
+                    >
+                      <span className="font-mono text-xs text-gray-500 w-28 shrink-0">{formatRut(a.rut)}</span>
+                      <span className="flex-1 truncate">{a.razon_social}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{a.tipo}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Razón Social</label>
-              <input value={reglaForm.razon_social} onChange={(e) => setReglaForm((p) => ({ ...p, razon_social: e.target.value }))} className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-40" />
-            </div>
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-xs text-gray-500 mb-1">Cuenta contable</label>
-              <select value={reglaForm.cuenta_codigo} onChange={(e) => setReglaForm((p) => ({ ...p, cuenta_codigo: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
-                <option value="">Seleccionar...</option>
-                {(libroActivo === "ventas" ? cuentasVentas : cuentasGastos).map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
-              </select>
-            </div>
-            <button onClick={guardarRegla} disabled={isPending || !reglaForm.rut || !reglaForm.cuenta_codigo} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-              Agregar
-            </button>
+            {reglaForm.rut && (
+              <div className="flex items-end gap-2 flex-wrap">
+                <div className="bg-white border border-blue-200 rounded-lg px-3 py-2 text-sm flex-1">
+                  <span className="font-mono text-xs text-blue-600">{formatRut(reglaForm.rut)}</span>
+                  <span className="mx-2 text-gray-400">—</span>
+                  <span className="font-medium">{reglaForm.razon_social}</span>
+                </div>
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-xs text-gray-500 mb-1">Cuenta contable</label>
+                  <select value={reglaForm.cuenta_codigo} onChange={(e) => setReglaForm((p) => ({ ...p, cuenta_codigo: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="">Seleccionar...</option>
+                    {(libroActivo === "ventas" ? cuentasVentas : cuentasGastos).map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                  </select>
+                </div>
+                <button onClick={guardarRegla} disabled={isPending || !reglaForm.rut || !reglaForm.cuenta_codigo} className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  Agregar
+                </button>
+              </div>
+            )}
           </div>
 
           {reglasLibro.length > 0 ? (

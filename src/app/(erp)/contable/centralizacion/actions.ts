@@ -85,6 +85,20 @@ export type ReglaCentralizacion = {
   estado: string;
 };
 
+export type Auxiliar = { rut: string; razon_social: string; tipo: string };
+
+export async function buscarAuxiliares(query: string): Promise<Auxiliar[]> {
+  const supabase = await createClient();
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const isRut = /^\d/.test(q);
+  let dbQuery = supabase.from("auxiliares").select("rut, razon_social, tipo").limit(15);
+  if (isRut) dbQuery = dbQuery.ilike("rut", `%${q}%`);
+  else dbQuery = dbQuery.ilike("razon_social", `%${q}%`);
+  const { data } = await dbQuery.order("razon_social");
+  return (data || []) as Auxiliar[];
+}
+
 export async function getReglas(tipo?: string) {
   const supabase = await createClient();
   let query = supabase.from("reglas_centralizacion").select("*").eq("estado", "S");
