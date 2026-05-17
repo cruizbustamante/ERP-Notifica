@@ -590,7 +590,7 @@ export async function cargarExcelCompras(registros: Array<{
   monto_total: number;
   tipo_doc_ref?: number;
   folio_doc_ref?: string;
-}>) {
+}>, mesOverride?: number, anioOverride?: number) {
   await requireRol("contador");
   const supabase = await createClient();
   const { createHash } = await import("crypto");
@@ -601,15 +601,14 @@ export async function cargarExcelCompras(registros: Array<{
     const rutNorm = normalizeRut(r.rut_emisor);
     const huellaStr = `C|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(r.monto_total)}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
-    // Compras: mes contable = fecha_recepcion (cuando entra al libro SII)
-    const fechaMes = r.fecha_recepcion || r.fecha_emision;
-    const [year, month] = fechaMes.split("-").map(Number);
+    const mes = mesOverride || (() => { const [, m] = (r.fecha_recepcion || r.fecha_emision).split("-").map(Number); return m; })();
+    const anio = anioOverride || (() => { const [y] = (r.fecha_recepcion || r.fecha_emision).split("-").map(Number); return y; })();
     return {
       ...r,
       rut_emisor: rutNorm,
       huella,
-      anio: year,
-      mes: month,
+      anio,
+      mes,
       centralizado: false,
     };
   });
@@ -731,7 +730,8 @@ export type PreviewCarga = {
 
 export async function verificarDuplicados(
   tipo: "ventas" | "compras" | "honorarios" | "transbank",
-  registros: Array<Record<string, unknown>>
+  registros: Array<Record<string, unknown>>,
+  mesOverride?: number
 ): Promise<PreviewCarga> {
   const supabase = await createClient();
   const { createHash } = await import("crypto");
@@ -755,9 +755,8 @@ export async function verificarDuplicados(
       const rutNorm = normalizeRut(String(r.rut_emisor || ""));
       huellaStr = `C|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(Number(r.monto_total))}`;
       folio = String(r.folio); rut = rutNorm; razon = String(r.razon_social || "");
-      const fechaMes = String(r.fecha_recepcion || r.fecha_emision);
       fecha = String(r.fecha_emision); monto = Number(r.monto_total); tipoDteNombre = String(r.tipo_dte_nombre || "");
-      const [, m] = fechaMes.split("-").map(Number); mes = m;
+      mes = mesOverride || (() => { const [, m] = String(r.fecha_recepcion || r.fecha_emision).split("-").map(Number); return m; })();
     } else if (tipo === "honorarios") {
       const rutNorm = normalizeRut(String(r.rut_emisor || ""));
       huellaStr = `H|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(Number(r.monto_bruto))}`;

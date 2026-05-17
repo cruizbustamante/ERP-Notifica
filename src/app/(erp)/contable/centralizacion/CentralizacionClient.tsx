@@ -66,7 +66,7 @@ export default function CentralizacionClient({
   const [reglaForm, setReglaForm] = useState({ rut: "", razon_social: "", cuenta_codigo: "", descripcion: "" });
 
   // Upload preview modal
-  const [uploadPreview, setUploadPreview] = useState<{ tipo: TipoLibro; preview: PreviewCarga; parsedData: Record<string, unknown>[] } | null>(null);
+  const [uploadPreview, setUploadPreview] = useState<{ tipo: TipoLibro; preview: PreviewCarga; parsedData: Record<string, unknown>[]; periodoArchivo?: { anio: number; mes: number }; mesConfirmado?: number } | null>(null);
 
   const fileRefs = { ventas: useRef<HTMLInputElement>(null), compras: useRef<HTMLInputElement>(null), honorarios: useRef<HTMLInputElement>(null), transbank: useRef<HTMLInputElement>(null) };
 
@@ -207,8 +207,14 @@ export default function CentralizacionClient({
 
         if (parsedData.length === 0) { setMensaje({ tipo: "error", texto: "No se encontraron registros válidos en el archivo" }); return; }
 
-        const preview = await verificarDuplicados(tipo, parsedData);
-        setUploadPreview({ tipo, preview, parsedData });
+        let periodoArchivo: { anio: number; mes: number } | undefined;
+        if (tipo === "compras") {
+          const match = file.name.match(/(\d{4})(\d{2})/);
+          if (match) periodoArchivo = { anio: Number(match[1]), mes: Number(match[2]) };
+        }
+
+        const preview = await verificarDuplicados(tipo, parsedData, periodoArchivo?.mes);
+        setUploadPreview({ tipo, preview, parsedData, periodoArchivo, mesConfirmado: periodoArchivo?.mes });
       } catch (err) {
         setMensaje({ tipo: "error", texto: `Error parseando archivo: ${err instanceof Error ? err.message : "desconocido"}` });
       }
@@ -217,7 +223,7 @@ export default function CentralizacionClient({
 
   const confirmarUpload = () => {
     if (!uploadPreview) return;
-    const { tipo, parsedData } = uploadPreview;
+    const { tipo, parsedData, mesConfirmado, periodoArchivo } = uploadPreview;
     setUploadPreview(null);
 
     startTransition(async () => {
@@ -226,7 +232,7 @@ export default function CentralizacionClient({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = parsedData as any[];
         if (tipo === "ventas") result = await cargarExcelVentas(data);
-        else if (tipo === "compras") result = await cargarExcelCompras(data);
+        else if (tipo === "compras") result = await cargarExcelCompras(data, mesConfirmado, periodoArchivo?.anio);
         else if (tipo === "honorarios") result = await cargarExcelHonorarios(data);
         else result = await cargarExcelTransbank(data);
 
@@ -315,6 +321,19 @@ export default function CentralizacionClient({
                 <button onClick={() => setUploadPreview(null)} className="text-gray-400 hover:text-gray-600 text-xl font-bold">×</button>
               </div>
               <p className="text-sm text-gray-500 mt-1">{uploadPreview.parsedData.length} registros encontrados en el archivo</p>
+              {uploadPreview.tipo === "compras" && uploadPreview.periodoArchivo && (
+                <div className="mt-3 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
+                  <span className="text-sm text-blue-800 font-medium">Periodo contable:</span>
+                  <select
+                    value={uploadPreview.mesConfirmado || uploadPreview.periodoArchivo.mes}
+                    onChange={(e) => setUploadPreview(prev => prev ? { ...prev, mesConfirmado: Number(e.target.value) } : null)}
+                    className="text-sm font-semibold border border-blue-300 rounded-lg px-3 py-1.5 bg-white text-blue-900 focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                  >
+                    {MESES.map((nombre, i) => i > 0 ? <option key={i} value={i}>{nombre}</option> : null)}
+                  </select>
+                  <span className="text-sm text-blue-700 font-semibold">{uploadPreview.periodoArchivo.anio}</span>
+                </div>
+              )}
             </div>
 
             <div className="p-5 overflow-y-auto flex-1 space-y-4">
