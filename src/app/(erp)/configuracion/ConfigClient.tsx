@@ -196,6 +196,15 @@ function TabCentralizacion({ config, isPending, startTransition, showMsg }: {
         { clave: "CENT_CTA_HONORARIOS_PAGAR", label: "Cuenta Honorarios por Pagar", default: "2-1-03-001" },
       ],
     },
+    {
+      titulo: "Vouchers Transbank",
+      campos: [
+        { clave: "CENT_CTA_TRANSBANK_BANCO", label: "Cuenta Banco (depósito neto)", default: "1-1-01-002" },
+        { clave: "CENT_CTA_TRANSBANK_COMISION", label: "Cuenta Comisión Transbank (gasto)", default: "5-1-04-001" },
+        { clave: "CENT_CTA_TRANSBANK_IVA", label: "Cuenta IVA Crédito (comisión)", default: "1-1-07-002" },
+        { clave: "CENT_CTA_TRANSBANK_VENTAS", label: "Cuenta Ventas/Clientes (contrapartida)", default: "4-1-01-001" },
+      ],
+    },
   ];
 
   const allCampos = secciones.flatMap((s) => s.campos);

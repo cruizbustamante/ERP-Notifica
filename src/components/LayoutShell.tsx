@@ -45,6 +45,7 @@ const NAV_SECTIONS = [
       { label: "CxC", href: "/comercial/cxc" },
       { label: "CxP", href: "/comercial/cxp" },
       { label: "Cobranza", href: "/comercial/cobranza" },
+      { label: "Marketplace", href: "/comercial/marketplace" },
       { label: "Suscripciones", href: "/comercial/suscripciones" },
     ],
   },

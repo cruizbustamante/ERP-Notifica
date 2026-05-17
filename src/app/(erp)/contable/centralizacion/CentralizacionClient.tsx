@@ -13,11 +13,13 @@ import {
   cargarExcelVentas,
   cargarExcelCompras,
   cargarExcelHonorarios,
+  cargarExcelTransbank,
   upsertRegla,
   deleteRegla,
   type TipoLibro,
   type DocPendiente,
   type DocHonorario,
+  type DocTransbank,
   type ReglaCentralizacion,
   type LineaPreview,
 } from "./actions";
@@ -26,7 +28,7 @@ type Periodo = { anio: number; estado: string };
 type Cuenta = { codigo: string; nombre: string };
 type MesData = { pendiente: number; centralizado: number; cantPend: number; cantCent: number; neto: number; iva: number };
 type Historial = { id: number; tipo: string; periodo: string; fecha: string; comprobante_id: number; registros: number; total_debe: number; total_haber: number; estado: string; anio: number; mes: number };
-type Resumen = { ventas: Record<number, MesData>; compras: Record<number, MesData>; honorarios: Record<number, MesData>; historial: Historial[] };
+type Resumen = { ventas: Record<number, MesData>; compras: Record<number, MesData>; honorarios: Record<number, MesData>; transbank: Record<number, MesData>; historial: Historial[] };
 
 export default function CentralizacionClient({
   periodos, cuentasVentas, cuentasGastos, reglas: reglasInit, currentYear,
@@ -47,6 +49,7 @@ export default function CentralizacionClient({
   const [libroActivo, setLibroActivo] = useState<TipoLibro | null>(null);
   const [docs, setDocs] = useState<DocPendiente[]>([]);
   const [docsHon, setDocsHon] = useState<DocHonorario[]>([]);
+  const [docsTransbank, setDocsTransbank] = useState<DocTransbank[]>([]);
   const [mesActivo, setMesActivo] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [cuentaContra, setCuentaContra] = useState("");
@@ -60,7 +63,7 @@ export default function CentralizacionClient({
   const [vistaReglas, setVistaReglas] = useState(false);
   const [reglaForm, setReglaForm] = useState({ rut: "", razon_social: "", cuenta_codigo: "", descripcion: "" });
 
-  const fileRefs = { ventas: useRef<HTMLInputElement>(null), compras: useRef<HTMLInputElement>(null), honorarios: useRef<HTMLInputElement>(null) };
+  const fileRefs = { ventas: useRef<HTMLInputElement>(null), compras: useRef<HTMLInputElement>(null), honorarios: useRef<HTMLInputElement>(null), transbank: useRef<HTMLInputElement>(null) };
 
   // ─── Acciones ──────────────────────────────────────────────────────────
 
@@ -78,6 +81,7 @@ export default function CentralizacionClient({
     setMesActivo(null);
     setDocs([]);
     setDocsHon([]);
+    setDocsTransbank([]);
     setVistaReglas(false);
   };
 
@@ -86,11 +90,12 @@ export default function CentralizacionClient({
     setVistaReglas(false);
     startTransition(async () => {
       setMesActivo(mes);
-      const { docs: d, docsHon: h, error } = await getDocumentosPendientes(tipo, anio, mes);
+      const { docs: d, docsHon: h, docsTransbank: t, error } = await getDocumentosPendientes(tipo, anio, mes);
       if (error) { setMensaje({ tipo: "error", texto: error }); return; }
       setDocs(d);
       setDocsHon(h);
-      setSelectedIds(new Set(tipo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
+      setDocsTransbank(t);
+      setSelectedIds(new Set(tipo === "transbank" ? t.map((x) => x.id) : tipo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
       setFiltroEstado("pendiente");
       setMensaje(null);
     });
@@ -100,11 +105,12 @@ export default function CentralizacionClient({
     if (!libroActivo) return;
     startTransition(async () => {
       setMesActivo(mes);
-      const { docs: d, docsHon: h, error } = await getDocumentosPendientes(libroActivo, anio, mes);
+      const { docs: d, docsHon: h, docsTransbank: t, error } = await getDocumentosPendientes(libroActivo, anio, mes);
       if (error) { setMensaje({ tipo: "error", texto: error }); return; }
       setDocs(d);
       setDocsHon(h);
-      setSelectedIds(new Set(libroActivo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
+      setDocsTransbank(t);
+      setSelectedIds(new Set(libroActivo === "transbank" ? t.map((x) => x.id) : libroActivo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
       setFiltroEstado("pendiente");
       setMensaje(null);
     });
@@ -112,9 +118,12 @@ export default function CentralizacionClient({
 
   const generarPreview = () => {
     if (!mesActivo || !libroActivo || selectedIds.size === 0) return;
-    const cuentas = libroActivo === "ventas" ? cuentasVentas : cuentasGastos;
-    const cuenta = cuentaContra || cuentas[0]?.codigo;
-    if (!cuenta) { setMensaje({ tipo: "error", texto: "Seleccione cuenta de contrapartida" }); return; }
+    let cuenta = "";
+    if (libroActivo !== "transbank") {
+      const cuentas = libroActivo === "ventas" ? cuentasVentas : cuentasGastos;
+      cuenta = cuentaContra || cuentas[0]?.codigo;
+      if (!cuenta) { setMensaje({ tipo: "error", texto: "Seleccione cuenta de contrapartida" }); return; }
+    }
 
     startTransition(async () => {
       const result = await previsualizarCentralizacion(libroActivo, anio, mesActivo, cuenta, [...selectedIds]);
@@ -125,8 +134,11 @@ export default function CentralizacionClient({
 
   const confirmarCentralizacion = () => {
     if (!mesActivo || !libroActivo || selectedIds.size === 0) return;
-    const cuentas = libroActivo === "ventas" ? cuentasVentas : cuentasGastos;
-    const cuenta = cuentaContra || cuentas[0]?.codigo;
+    let cuenta = "";
+    if (libroActivo !== "transbank") {
+      const cuentas = libroActivo === "ventas" ? cuentasVentas : cuentasGastos;
+      cuenta = cuentaContra || cuentas[0]?.codigo;
+    }
 
     startTransition(async () => {
       const result = await centralizarDocumentos(libroActivo, anio, mesActivo, cuenta, [...selectedIds]);
@@ -154,7 +166,7 @@ export default function CentralizacionClient({
     setSelectedIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   };
   const toggleAll = () => {
-    const allIds = libroActivo === "honorarios" ? docsHon.map((d) => d.id) : docs.map((d) => d.id);
+    const allIds = libroActivo === "transbank" ? docsTransbank.map((d) => d.id) : libroActivo === "honorarios" ? docsHon.map((d) => d.id) : docs.map((d) => d.id);
     setSelectedIds(selectedIds.size === allIds.length ? new Set() : new Set(allIds));
   };
 
@@ -185,9 +197,10 @@ export default function CentralizacionClient({
         let result: { nuevos: number; duplicados: number; errores: string[] };
         if (tipo === "ventas") result = await cargarExcelVentas(parseSIIVentas(rows));
         else if (tipo === "compras") result = await cargarExcelCompras(parseSIICompras(rows));
-        else result = await cargarExcelHonorarios(parseSIIHonorarios(rows));
+        else if (tipo === "honorarios") result = await cargarExcelHonorarios(parseSIIHonorarios(rows));
+        else result = await cargarExcelTransbank(parseTransbank(rows));
 
-        const tipoLabel = tipo === "ventas" ? "Ventas" : tipo === "compras" ? "Compras" : "Honorarios";
+        const tipoLabel = tipo === "ventas" ? "Ventas" : tipo === "compras" ? "Compras" : tipo === "honorarios" ? "Honorarios" : "Transbank";
         setMensaje({ tipo: result.errores.length ? "error" : "ok", texto: `${tipoLabel}: ${result.nuevos} nuevos, ${result.duplicados} duplicados${result.errores.length ? ". " + result.errores.join("; ") : ""}` });
         cargarResumen();
       } catch (err) {
@@ -263,22 +276,25 @@ export default function CentralizacionClient({
       {/* ─── Vista Principal: 3 Cards de Libros ─────────────────────────── */}
       {resumen && !libroActivo && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {([
               { tipo: "ventas" as const, label: "Libro de Ventas", desc: "Facturas, Boletas, NC, ND", icon: "📄", color: "blue" },
               { tipo: "compras" as const, label: "Libro de Compras", desc: "Facturas proveedores, NC, ND", icon: "📋", color: "orange" },
               { tipo: "honorarios" as const, label: "Libro de Honorarios", desc: "Boletas de honorarios", icon: "📝", color: "purple" },
+              { tipo: "transbank" as const, label: "Vouchers Transbank", desc: "Pagos tarjeta débito/crédito", icon: "💳", color: "teal" },
             ]).map(({ tipo, label, desc, icon, color }) => {
               const k = calcKpis(resumen[tipo]);
               const colorMap: Record<string, string> = {
                 blue: "border-blue-200 bg-blue-50/30",
                 orange: "border-orange-200 bg-orange-50/30",
                 purple: "border-purple-200 bg-purple-50/30",
+                teal: "border-teal-200 bg-teal-50/30",
               };
               const btnColor: Record<string, string> = {
                 blue: "bg-blue-600 hover:bg-blue-700",
                 orange: "bg-orange-600 hover:bg-orange-700",
                 purple: "bg-purple-600 hover:bg-purple-700",
+                teal: "bg-teal-600 hover:bg-teal-700",
               };
               return (
                 <div key={tipo} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${k.total > 0 ? colorMap[color] : ""}`}>
@@ -360,6 +376,7 @@ export default function CentralizacionClient({
                     { tipo: "ventas" as const, label: "Ventas", colorBg: "bg-blue-100", colorText: "text-blue-700" },
                     { tipo: "compras" as const, label: "Compras", colorBg: "bg-orange-100", colorText: "text-orange-700" },
                     { tipo: "honorarios" as const, label: "Honorarios", colorBg: "bg-purple-100", colorText: "text-purple-700" },
+                    { tipo: "transbank" as const, label: "Transbank", colorBg: "bg-teal-100", colorText: "text-teal-700" },
                   ]).map(({ tipo, label, colorBg, colorText }) => (
                     <tr key={tipo} className="border-b last:border-0">
                       <td className="py-2">
@@ -425,7 +442,7 @@ export default function CentralizacionClient({
                     {resumen.historial.map((h) => (
                       <tr key={h.id} className="border-b last:border-0 hover:bg-gray-50">
                         <td className="py-2">
-                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${h.tipo === "VENTAS" ? "bg-blue-100 text-blue-700" : h.tipo === "COMPRAS" ? "bg-orange-100 text-orange-700" : "bg-purple-100 text-purple-700"}`}>
+                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${h.tipo === "VENTAS" ? "bg-blue-100 text-blue-700" : h.tipo === "COMPRAS" ? "bg-orange-100 text-orange-700" : h.tipo === "TRANSBANK" ? "bg-teal-100 text-teal-700" : "bg-purple-100 text-purple-700"}`}>
                             {h.tipo}
                           </span>
                         </td>
@@ -462,7 +479,7 @@ export default function CentralizacionClient({
               </button>
               <div>
                 <h2 className="text-lg font-bold text-gray-900">
-                  {libroActivo === "ventas" ? "Libro de Ventas" : libroActivo === "compras" ? "Libro de Compras" : "Libro de Honorarios"}
+                  {libroActivo === "ventas" ? "Libro de Ventas" : libroActivo === "compras" ? "Libro de Compras" : libroActivo === "honorarios" ? "Libro de Honorarios" : "Vouchers Transbank"}
                 </h2>
                 <p className="text-xs text-gray-500">{anio}</p>
               </div>
@@ -540,7 +557,7 @@ export default function CentralizacionClient({
           )}
 
           {/* Detalle documentos de un mes - Ventas/Compras */}
-          {mesActivo && libroActivo !== "honorarios" && (
+          {mesActivo && libroActivo !== "honorarios" && libroActivo !== "transbank" && (
             <div className="p-4 space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-3">
@@ -752,6 +769,125 @@ export default function CentralizacionClient({
                 <div className="border border-indigo-200 bg-indigo-50/30 rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="font-semibold text-gray-900">Asiento a generar — Honorarios {MESES[mesActivo!]} {anio}</h4>
+                    <button onClick={() => setPreview(null)} className="text-gray-400 hover:text-gray-600 text-sm">Cerrar</button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-gray-500 border-b">
+                          <th className="pb-2 font-medium">Cuenta</th>
+                          <th className="pb-2 font-medium">Glosa</th>
+                          <th className="pb-2 font-medium">Auxiliar</th>
+                          <th className="pb-2 font-medium text-right">Debe</th>
+                          <th className="pb-2 font-medium text-right">Haber</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.lineas.map((l, i) => (
+                          <tr key={i} className="border-b last:border-0 hover:bg-white/60">
+                            <td className="py-1.5 font-mono text-xs font-medium">{l.cuenta_codigo}</td>
+                            <td className="py-1.5 text-xs truncate max-w-[220px]">{l.glosa}</td>
+                            <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
+                            <td className="py-1.5 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
+                            <td className="py-1.5 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 font-bold">
+                          <td colSpan={3} className="py-2 text-right">TOTALES</td>
+                          <td className="py-2 text-right font-mono">{formatMonto(preview.totalDebe)}</td>
+                          <td className="py-2 text-right font-mono">{formatMonto(preview.totalHaber)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <div className="flex items-center justify-between pt-2">
+                    <span className={`text-xs font-medium ${Math.abs(preview.totalDebe - preview.totalHaber) <= 1 ? "text-green-600" : "text-red-600"}`}>
+                      {Math.abs(preview.totalDebe - preview.totalHaber) <= 1 ? "Cuadrado" : `Descuadre: ${formatMonto(Math.abs(preview.totalDebe - preview.totalHaber))}`}
+                    </span>
+                    <div className="flex gap-2">
+                      <button onClick={() => setPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">
+                        Cancelar
+                      </button>
+                      <button onClick={confirmarCentralizacion} disabled={isPending || Math.abs(preview.totalDebe - preview.totalHaber) > 1} className="bg-green-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
+                        {isPending ? "Contabilizando..." : "Confirmar y contabilizar"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Detalle documentos de un mes - Transbank */}
+          {mesActivo && libroActivo === "transbank" && (
+            <div className="p-4 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-3">
+                  <button onClick={() => { setMesActivo(null); setDocsTransbank([]); }} className="text-gray-500 hover:text-gray-700 text-sm">← Volver</button>
+                  <h3 className="font-semibold text-gray-900">Transbank — {MESES[mesActivo]} {anio}</h3>
+                  <span className="text-sm text-gray-500">{docsTransbank.length} vouchers</span>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b">
+                      <th className="pb-2 w-8"><input type="checkbox" checked={selectedIds.size === docsTransbank.length && docsTransbank.length > 0} onChange={toggleAll} /></th>
+                      <th className="pb-2 font-medium">Fecha</th>
+                      <th className="pb-2 font-medium">N° Operación</th>
+                      <th className="pb-2 font-medium">Tipo Tarjeta</th>
+                      <th className="pb-2 font-medium text-right">Bruto</th>
+                      <th className="pb-2 font-medium text-right">Comisión</th>
+                      <th className="pb-2 font-medium text-right">IVA Com.</th>
+                      <th className="pb-2 font-medium text-right">Neto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {docsTransbank.map((d) => (
+                      <tr key={d.id} className="border-b last:border-0 hover:bg-gray-50">
+                        <td className="py-1.5"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => toggleDoc(d.id)} /></td>
+                        <td className="py-1.5 text-xs">{d.fecha}</td>
+                        <td className="py-1.5 font-mono text-xs">{d.numero_operacion}</td>
+                        <td className="py-1.5">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${d.tipo_tarjeta?.toLowerCase().includes("déb") || d.tipo_tarjeta?.toLowerCase().includes("deb") ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                            {d.tipo_tarjeta}
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_bruto)}</td>
+                        <td className="py-1.5 text-right font-mono text-amber-600">{formatMonto(d.comision)}</td>
+                        <td className="py-1.5 text-right font-mono text-amber-600">{formatMonto(d.iva_comision)}</td>
+                        <td className="py-1.5 text-right font-mono font-medium">{formatMonto(d.monto_neto)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {docsTransbank.length > 0 && !preview && (
+                <div className="flex items-center justify-between bg-teal-50 p-4 rounded-lg border border-teal-200 flex-wrap gap-2">
+                  <div className="text-sm">
+                    <span className="font-medium">{selectedIds.size}</span> de {docsTransbank.length} · Bruto: <span className="font-mono font-medium">
+                      {formatMonto(docsTransbank.filter((d) => selectedIds.has(d.id)).reduce((s, d) => s + d.monto_bruto, 0))}
+                    </span> · Comisión: <span className="font-mono font-medium text-amber-600">
+                      {formatMonto(docsTransbank.filter((d) => selectedIds.has(d.id)).reduce((s, d) => s + d.comision + d.iva_comision, 0))}
+                    </span> · Neto: <span className="font-mono font-medium text-green-600">
+                      {formatMonto(docsTransbank.filter((d) => selectedIds.has(d.id)).reduce((s, d) => s + d.monto_neto, 0))}
+                    </span>
+                  </div>
+                  <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-teal-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50">
+                    {isPending ? "Procesando..." : "Previsualizar asiento"}
+                  </button>
+                </div>
+              )}
+
+              {/* Preview del asiento contable */}
+              {preview && (
+                <div className="border border-indigo-200 bg-indigo-50/30 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-gray-900">Asiento a generar — Transbank {MESES[mesActivo!]} {anio}</h4>
                     <button onClick={() => setPreview(null)} className="text-gray-400 hover:text-gray-600 text-sm">Cerrar</button>
                   </div>
                   <div className="overflow-x-auto">
@@ -1072,4 +1208,33 @@ function parseDateHon(val: string): string {
     return `${yyyy}-${m2[2].padStart(2, "0")}-${m2[1].padStart(2, "0")}`;
   }
   return parseDate(s);
+}
+
+// ─── Transbank Vouchers ────────────────────────────────────────────────────
+// Expected columns: Fecha, Monto Bruto/Monto, Comisión, IVA Comisión/IVA,
+//                   Monto Neto/Neto, N° Operación/Numero Operacion, Tipo Tarjeta
+
+function parseTransbank(rows: Record<string, string>[]) {
+  return rows.map((r) => {
+    const fecha = parseDate(col(r, "Fecha", "Fecha Pago", "Fecha Venta", "Fecha Transacción", "Fecha Transaccion"));
+    const numOp = col(r, "N° Operación", "Numero Operacion", "N° Operacion", "Nro Operacion", "Código Autorización", "Codigo Autorizacion", "N° Voucher");
+    const tipoTarjeta = col(r, "Tipo Tarjeta", "Tipo", "Medio de Pago", "Medio Pago");
+    const bruto = num(col(r, "Monto Bruto", "Monto", "Monto Venta", "Total", "Monto Total"));
+    const comision = num(col(r, "Comisión", "Comision", "Comisión Neta", "Comision Neta", "Descuento"));
+    const ivaComision = num(col(r, "IVA Comisión", "IVA Comision", "IVA", "IVA Descuento"));
+    const neto = num(col(r, "Monto Neto", "Neto", "Monto Abono", "Abono", "Líquido", "Liquido"));
+
+    // Calculate net if not provided: bruto - comision - ivaComision
+    const montoNeto = neto || (bruto - comision - ivaComision);
+
+    return {
+      fecha,
+      numero_operacion: numOp,
+      tipo_tarjeta: tipoTarjeta,
+      monto_bruto: bruto,
+      comision,
+      iva_comision: ivaComision,
+      monto_neto: montoNeto,
+    };
+  }).filter((r) => r.fecha && r.monto_bruto > 0);
 }

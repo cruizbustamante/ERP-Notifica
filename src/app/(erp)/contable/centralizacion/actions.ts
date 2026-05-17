@@ -27,7 +27,7 @@ async function getConfig() {
 
 // ─── Tipos exportados ──────────────────────────────────────────────────
 
-export type TipoLibro = "ventas" | "compras" | "honorarios";
+export type TipoLibro = "ventas" | "compras" | "honorarios" | "transbank";
 
 export type DocPendiente = {
   id: number;
@@ -56,6 +56,17 @@ export type DocHonorario = {
   monto_bruto: number;
   retencion: number;
   monto_liquido: number;
+};
+
+export type DocTransbank = {
+  id: number;
+  fecha: string | null;
+  numero_operacion: string;
+  tipo_tarjeta: string;
+  monto_bruto: number;
+  comision: number;
+  iva_comision: number;
+  monto_neto: number;
 };
 
 type MesData = { pendiente: number; centralizado: number; cantPend: number; cantCent: number; neto: number; iva: number };
@@ -114,10 +125,11 @@ export async function deleteRegla(id: number) {
 export async function getResumenCentralizacion(anio: number) {
   const supabase = await createClient();
 
-  const [{ data: ventas }, { data: compras }, { data: honorarios }, { data: historial }] = await Promise.all([
+  const [{ data: ventas }, { data: compras }, { data: honorarios }, { data: transbank }, { data: historial }] = await Promise.all([
     supabase.from("ventas_sii").select("mes, monto_neto, monto_iva, monto_total, tipo_dte, centralizado").eq("anio", anio),
     supabase.from("compras_sii").select("mes, monto_neto, monto_iva, monto_total, tipo_dte, centralizado").eq("anio", anio),
     supabase.from("honorarios_sii").select("mes, monto_bruto, retencion, monto_liquido, centralizado").eq("anio", anio),
+    supabase.from("transbank_vouchers").select("mes, monto_bruto, comision, iva_comision, monto_neto, centralizado").eq("anio", anio),
     supabase.from("centralizaciones").select("*").eq("anio", anio).order("created_at", { ascending: false }),
   ]);
 
@@ -126,7 +138,8 @@ export async function getResumenCentralizacion(anio: number) {
   const ventasPorMes: Record<number, MesData> = {};
   const comprasPorMes: Record<number, MesData> = {};
   const honorariosPorMes: Record<number, MesData> = {};
-  for (let m = 1; m <= 12; m++) { ventasPorMes[m] = emptyMes(); comprasPorMes[m] = emptyMes(); honorariosPorMes[m] = emptyMes(); }
+  const transbankPorMes: Record<number, MesData> = {};
+  for (let m = 1; m <= 12; m++) { ventasPorMes[m] = emptyMes(); comprasPorMes[m] = emptyMes(); honorariosPorMes[m] = emptyMes(); transbankPorMes[m] = emptyMes(); }
 
   for (const v of ventas || []) {
     const m = v.mes;
@@ -159,10 +172,21 @@ export async function getResumenCentralizacion(anio: number) {
     else { honorariosPorMes[m].pendiente += bruto; honorariosPorMes[m].cantPend++; honorariosPorMes[m].neto += bruto; honorariosPorMes[m].iva += ret; }
   }
 
+  for (const t of transbank || []) {
+    const m = t.mes;
+    if (!m || m < 1 || m > 12) continue;
+    const bruto = Number(t.monto_bruto) || 0;
+    const comision = Number(t.comision) || 0;
+    const ivaComision = Number(t.iva_comision) || 0;
+    if (t.centralizado) { transbankPorMes[m].centralizado += bruto; transbankPorMes[m].cantCent++; }
+    else { transbankPorMes[m].pendiente += bruto; transbankPorMes[m].cantPend++; transbankPorMes[m].neto += bruto; transbankPorMes[m].iva += comision + ivaComision; }
+  }
+
   return {
     ventas: ventasPorMes,
     compras: comprasPorMes,
     honorarios: honorariosPorMes,
+    transbank: transbankPorMes,
     historial: (historial || []) as Historial[],
   };
 }
@@ -171,6 +195,31 @@ export async function getResumenCentralizacion(anio: number) {
 
 export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes: number) {
   const supabase = await createClient();
+
+  if (tipo === "transbank") {
+    const { data, error } = await supabase
+      .from("transbank_vouchers")
+      .select("*")
+      .eq("anio", anio)
+      .eq("mes", mes)
+      .eq("centralizado", false)
+      .order("fecha");
+
+    if (error) return { docs: [], docsHon: [], docsTransbank: [], error: error.message };
+
+    const docsTransbank: DocTransbank[] = (data || []).map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      numero_operacion: r.numero_operacion || "",
+      tipo_tarjeta: r.tipo_tarjeta || "",
+      monto_bruto: Number(r.monto_bruto) || 0,
+      comision: Number(r.comision) || 0,
+      iva_comision: Number(r.iva_comision) || 0,
+      monto_neto: Number(r.monto_neto) || 0,
+    }));
+
+    return { docs: [], docsHon: [], docsTransbank, error: null };
+  }
 
   if (tipo === "honorarios") {
     const { data, error } = await supabase
@@ -181,7 +230,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
       .eq("centralizado", false)
       .order("fecha_emision");
 
-    if (error) return { docs: [], docsHon: [], error: error.message };
+    if (error) return { docs: [], docsHon: [], docsTransbank: [], error: error.message };
 
     const docsHon: DocHonorario[] = (data || []).map((r) => ({
       id: r.id,
@@ -194,7 +243,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
       monto_liquido: Number(r.monto_liquido) || 0,
     }));
 
-    return { docs: [], docsHon, error: null };
+    return { docs: [], docsHon, docsTransbank: [], error: null };
   }
 
   const tabla = tipo === "ventas" ? "ventas_sii" : "compras_sii";
@@ -208,7 +257,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
     .order("tipo_dte")
     .order("folio");
 
-  if (error) return { docs: [], docsHon: [], error: error.message };
+  if (error) return { docs: [], docsHon: [], docsTransbank: [], error: error.message };
 
   const docs: DocPendiente[] = (data || []).map((r) => {
     const dte = r.tipo_dte || 33;
@@ -250,7 +299,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
     return parseInt(a.folio) - parseInt(b.folio);
   });
 
-  return { docs, docsHon: [], error: null };
+  return { docs, docsHon: [], docsTransbank: [], error: null };
 }
 
 // ─── Previsualizar centralización ────────────────────────────────────────
@@ -287,7 +336,13 @@ export async function previsualizarCentralizacion(
 
   let lineas: LineaComp[];
 
-  if (tipo === "honorarios") {
+  if (tipo === "transbank") {
+    const { docsTransbank, error: docsErr } = await getDocumentosPendientes(tipo, anio, mes);
+    if (docsErr) return { lineas: [], totalDebe: 0, totalHaber: 0, error: docsErr };
+    const selectedDocs = docsTransbank.filter((d) => docIds.includes(d.id));
+    if (selectedDocs.length === 0) return { lineas: [], totalDebe: 0, totalHaber: 0, error: "Sin documentos" };
+    lineas = buildLineasTransbank(selectedDocs, config);
+  } else if (tipo === "honorarios") {
     const { docsHon, error: docsErr } = await getDocumentosPendientes(tipo, anio, mes);
     if (docsErr) return { lineas: [], totalDebe: 0, totalHaber: 0, error: docsErr };
     const selectedDocs = docsHon.filter((d) => docIds.includes(d.id));
@@ -345,7 +400,15 @@ export async function centralizarDocumentos(
   let lineas: LineaComp[];
   let registros = 0;
 
-  if (tipo === "honorarios") {
+  if (tipo === "transbank") {
+    const { docsTransbank, error: docsErr } = await getDocumentosPendientes(tipo, anio, mes);
+    if (docsErr) return { error: docsErr };
+    const selectedDocs = docsTransbank.filter((d) => docIds.includes(d.id));
+    if (selectedDocs.length === 0) return { error: "Ningún documento pendiente coincide" };
+    registros = selectedDocs.length;
+
+    lineas = buildLineasTransbank(selectedDocs, config);
+  } else if (tipo === "honorarios") {
     const { docsHon, error: docsErr } = await getDocumentosPendientes(tipo, anio, mes);
     if (docsErr) return { error: docsErr };
     const selectedDocs = docsHon.filter((d) => docIds.includes(d.id));
@@ -391,7 +454,7 @@ export async function centralizarDocumentos(
   if (result.error) return { error: result.error };
 
   // Marcar documentos como centralizados
-  const tabla = tipo === "ventas" ? "ventas_sii" : tipo === "compras" ? "compras_sii" : "honorarios_sii";
+  const tabla = tipo === "ventas" ? "ventas_sii" : tipo === "compras" ? "compras_sii" : tipo === "honorarios" ? "honorarios_sii" : "transbank_vouchers";
   await supabase
     .from(tabla)
     .update({ centralizado: true, comprobante_id: result.data!.id })
@@ -441,7 +504,7 @@ export async function anularCentralizacion(centralizacionId: number) {
 
   // Desmarcar documentos
   const tipo = (cent.tipo || "").toLowerCase();
-  const tablaMap: Record<string, string> = { ventas: "ventas_sii", compras: "compras_sii", honorarios: "honorarios_sii" };
+  const tablaMap: Record<string, string> = { ventas: "ventas_sii", compras: "compras_sii", honorarios: "honorarios_sii", transbank: "transbank_vouchers" };
   const tabla = tablaMap[tipo];
   if (tabla) {
     await supabase
@@ -592,6 +655,48 @@ export async function cargarExcelHonorarios(registros: Array<{
     const batch = records.slice(i, i + 50);
     const { data, error } = await supabase
       .from("honorarios_sii")
+      .upsert(batch, { onConflict: "huella", ignoreDuplicates: true })
+      .select("id");
+    if (error) errores.push(`Lote ${Math.floor(i / 50) + 1}: ${error.message}`);
+    else nuevos += data?.length || 0;
+    duplicados += batch.length - (data?.length || 0);
+  }
+
+  revalidatePath("/contable/centralizacion");
+  return { nuevos, duplicados, errores };
+}
+
+export async function cargarExcelTransbank(registros: Array<{
+  fecha: string;
+  numero_operacion: string;
+  tipo_tarjeta: string;
+  monto_bruto: number;
+  comision: number;
+  iva_comision: number;
+  monto_neto: number;
+}>) {
+  const supabase = await createClient();
+  const { createHash } = await import("crypto");
+  let nuevos = 0, duplicados = 0;
+  const errores: string[] = [];
+
+  const records = registros.map((r) => {
+    const huellaStr = `TB|${r.numero_operacion}|${r.fecha}|${Math.round(r.monto_bruto)}`;
+    const huella = createHash("md5").update(huellaStr).digest("hex");
+    const [year, month] = r.fecha.split("-").map(Number);
+    return {
+      ...r,
+      huella,
+      anio: year,
+      mes: month,
+      centralizado: false,
+    };
+  });
+
+  for (let i = 0; i < records.length; i += 50) {
+    const batch = records.slice(i, i + 50);
+    const { data, error } = await supabase
+      .from("transbank_vouchers")
       .upsert(batch, { onConflict: "huella", ignoreDuplicates: true })
       .select("id");
     if (error) errores.push(`Lote ${Math.floor(i / 50) + 1}: ${error.message}`);
@@ -819,6 +924,73 @@ function buildLineasHonorarios(docs: DocHonorario[], cuentaGasto: string, config
       haber: totalRetencion,
       glosa: "Retención Honorarios",
       auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
+    });
+  }
+
+  return lineas;
+}
+
+function buildLineasTransbank(docs: DocTransbank[], config: Record<string, string>) {
+  const ctaBanco = config.CENT_CTA_TRANSBANK_BANCO || "1-1-01-002";
+  const ctaComision = config.CENT_CTA_TRANSBANK_COMISION || "5-1-04-001";
+  const ctaIVA = config.CENT_CTA_TRANSBANK_IVA || "1-1-07-002";
+  const ctaVentas = config.CENT_CTA_TRANSBANK_VENTAS || "4-1-01-001";
+
+  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
+  const lineas: Linea[] = [];
+  let totalNeto = 0;
+  let totalComision = 0;
+  let totalIVA = 0;
+  let totalBruto = 0;
+
+  for (const doc of docs) {
+    totalNeto += Math.round(doc.monto_neto);
+    totalComision += Math.round(doc.comision);
+    totalIVA += Math.round(doc.iva_comision);
+    totalBruto += Math.round(doc.monto_bruto);
+  }
+
+  // DEBE: Banco (monto neto depositado)
+  if (totalNeto !== 0) {
+    lineas.push({
+      cuenta_codigo: ctaBanco,
+      debe: totalNeto,
+      haber: 0,
+      glosa: "Depósito Transbank",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+    });
+  }
+
+  // DEBE: Comisión Transbank (gasto)
+  if (totalComision !== 0) {
+    lineas.push({
+      cuenta_codigo: ctaComision,
+      debe: totalComision,
+      haber: 0,
+      glosa: "Comisión Transbank",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+    });
+  }
+
+  // DEBE: IVA Crédito Fiscal (sobre la comisión)
+  if (totalIVA !== 0) {
+    lineas.push({
+      cuenta_codigo: ctaIVA,
+      debe: totalIVA,
+      haber: 0,
+      glosa: "IVA Crédito Fiscal Comisión Transbank",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+    });
+  }
+
+  // HABER: Ventas/Clientes (monto bruto)
+  if (totalBruto !== 0) {
+    lineas.push({
+      cuenta_codigo: ctaVentas,
+      debe: 0,
+      haber: totalBruto,
+      glosa: "Ventas Transbank",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
     });
   }
 

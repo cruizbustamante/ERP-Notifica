@@ -333,201 +333,308 @@ export type MatchResult = {
     comprobante_id: number;
     monto: number;
     fecha_cartola: string;
-    fecha_comprobante: string;
-    tipo_match: "exacto" | "monto" | "documento";
+    receptor: string;
+    tipo_match: "exacto" | "combinado";
+    docs: string;
   }>;
   error: string | null;
 };
+
+function validarDVRut(rut: string): boolean {
+  const limpio = rut.replace(/[^0-9kK]/g, "").toUpperCase();
+  if (limpio.length < 2) return false;
+  const cuerpo = limpio.slice(0, -1);
+  const dvIngresado = limpio.slice(-1);
+
+  let suma = 0;
+  let multiplicador = 2;
+  for (let i = cuerpo.length - 1; i >= 0; i--) {
+    suma += parseInt(cuerpo[i]) * multiplicador;
+    multiplicador = multiplicador === 7 ? 2 : multiplicador + 1;
+  }
+  const resto = suma % 11;
+  let dvCalculado: string;
+  if (resto === 0) dvCalculado = "0";
+  else if (resto === 1) dvCalculado = "K";
+  else dvCalculado = String(11 - resto);
+
+  return dvIngresado === dvCalculado;
+}
+
+function extraerRUTDeDescripcion(desc: string): string {
+  if (!desc) return "";
+  const str = String(desc);
+
+  // 1) Formato con puntos y guión: XX.XXX.XXX-X
+  const m1 = str.match(/(\d{1,2}\.\d{3}\.\d{3}-[\dkK])/);
+  if (m1 && validarDVRut(m1[1])) return m1[1].replace(/\./g, "").toUpperCase();
+
+  // 2) Formato con guión sin puntos: XXXXXXXX-X
+  const m2 = str.match(/(\d{7,8}-[\dkK])/i);
+  if (m2 && validarDVRut(m2[1])) return m2[1].toUpperCase();
+
+  // 3) Precedido por "RUT"
+  const m3 = str.match(/RUT[:\s]+(\d[\d.\s]{5,10}[\dkK])/i);
+  if (m3) {
+    let candidate = m3[1].replace(/[\.\s]/g, "");
+    if (!candidate.includes("-") && candidate.length >= 8) {
+      candidate = candidate.slice(0, -1) + "-" + candidate.slice(-1);
+    }
+    if (validarDVRut(candidate)) return candidate.toUpperCase();
+  }
+
+  // 4) Número RAW al inicio (banco pone RUT del origen sin formato)
+  //    Ej: "0126662203 Transf." → 12666220-3
+  const m4 = str.match(/^0*(\d{7,9}[\dkK])\b/i);
+  if (m4) {
+    let raw = m4[1];
+    if (!raw.includes("-") && raw.length >= 8) {
+      raw = raw.slice(0, -1) + "-" + raw.slice(-1);
+    }
+    if (validarDVRut(raw)) return raw.toUpperCase();
+  }
+
+  return "";
+}
 
 export async function matchAutomatico(anio: number, mes: number): Promise<MatchResult> {
   const supabase = await createClient();
   const config = await getConfig();
   const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
+  const ctaClientes = config.CUENTA_CLIENTES || "1-1-03-001";
+  const ctaClientesBol = config.CUENTA_CLIENTES_BOLETAS || "1-1-03-002";
+  const ctaProveedores = config.CUENTA_PROVEEDORES || "2-1-02-001";
+  const ctaHonorarios = config.CUENTA_HONORARIOS_PAGAR || "2-1-04-001";
 
-  // 1. Get pending cartola movements for this month
-  const { data: pendientes } = await supabase
+  const cuentasCXC = [ctaClientes, ctaClientesBol].filter(Boolean);
+  const cuentasCXP = [ctaProveedores, ctaHonorarios].filter(Boolean);
+  const todasCuentasDoc = [...cuentasCXC, ...cuentasCXP];
+
+  // 1. Get pending cartola movements
+  const { data: cartolaRows } = await supabase
     .from("cartolas")
     .select("id, fecha, monto, cargo_abono, descripcion, num_doc")
     .eq("anio", anio)
     .eq("mes", mes)
     .eq("contabilizado", false);
 
-  if (!pendientes || pendientes.length === 0) {
+  if (!cartolaRows || cartolaRows.length === 0) {
     return { matched: 0, details: [], error: null };
   }
 
-  // 2. Get mov_contables on bank account for this month that are NOT linked to any cartola
-  //    These are comprobantes created manually (not via cartola contabilizar)
-  const { data: movsContables } = await supabase
-    .from("mov_contables")
-    .select("comprobante_id, debe, haber, glosa, num_doc, comprobantes!inner(id, fecha, anio, mes, estado)")
-    .eq("cuenta_codigo", ctaBanco)
-    .eq("comprobantes.anio", anio)
-    .eq("comprobantes.mes", mes)
-    .eq("comprobantes.estado", "VIGENTE");
-
-  if (!movsContables || movsContables.length === 0) {
-    return { matched: 0, details: [], error: null };
-  }
-
-  // 3. Find which comprobante IDs are already linked to a cartola
-  const compIds = [...new Set(movsContables.map((m) => m.comprobante_id))];
-  const { data: linkedCartolas } = await supabase
-    .from("cartolas")
-    .select("comprobante_id")
-    .in("comprobante_id", compIds)
-    .eq("contabilizado", true);
-
-  const linkedCompIds = new Set((linkedCartolas || []).map((c) => c.comprobante_id));
-
-  // Filter to only unlinked accounting movements
-  const unlinkedMovs = movsContables.filter((m) => !linkedCompIds.has(m.comprobante_id));
-
-  if (unlinkedMovs.length === 0) {
-    return { matched: 0, details: [], error: null };
-  }
-
-  // 4. Build candidate list from unlinked movements
-  type Candidate = {
-    comprobante_id: number;
-    monto: number;
-    cargo_abono: string;
-    fecha: string;
-    glosa: string;
-    num_doc: string;
-    used: boolean;
+  // 2. Extract RUTs from descriptions
+  type PendienteMov = {
+    id: number; fecha: string; monto: number; esAbono: boolean;
+    descripcion: string; rut: string;
   };
 
-  const candidates: Candidate[] = unlinkedMovs.map((m) => {
-    const comp = m.comprobantes as unknown as { id: number; fecha: string; anio: number; mes: number; estado: string };
-    const debe = Number(m.debe) || 0;
-    const haber = Number(m.haber) || 0;
-    // Bank account: debe = abono (money in), haber = cargo (money out)
-    return {
-      comprobante_id: m.comprobante_id,
-      monto: debe > 0 ? debe : haber,
-      cargo_abono: debe > 0 ? "A" : "C",
-      fecha: comp.fecha,
-      glosa: m.glosa || "",
-      num_doc: m.num_doc || "",
-      used: false,
-    };
-  });
+  const pendientes: PendienteMov[] = [];
+  const rutsNecesarios = new Set<string>();
 
-  // 5. Matching algorithm
+  for (const row of cartolaRows) {
+    const rut = extraerRUTDeDescripcion(row.descripcion || "");
+    if (!rut) continue;
+    rutsNecesarios.add(rut);
+    pendientes.push({
+      id: row.id,
+      fecha: row.fecha || "",
+      monto: Math.abs(Number(row.monto) || 0),
+      esAbono: row.cargo_abono === "A",
+      descripcion: row.descripcion || "",
+      rut,
+    });
+  }
+
+  if (pendientes.length === 0) {
+    return { matched: 0, details: [], error: null };
+  }
+
+  // 3. Get all accounting movements for those RUTs in CXC/CXP accounts
+  const { data: movsDoc } = await supabase
+    .from("mov_contables")
+    .select("cuenta_codigo, debe, haber, auxiliar_rut, tipo_doc, num_doc, referencia, comprobantes!inner(estado)")
+    .in("cuenta_codigo", todasCuentasDoc)
+    .in("auxiliar_rut", Array.from(rutsNecesarios))
+    .eq("comprobantes.estado", "VIGENTE");
+
+  if (!movsDoc || movsDoc.length === 0) {
+    return { matched: 0, details: [], error: null };
+  }
+
+  // 4. Get plan_cuentas to know account types
+  const { data: planCtas } = await supabase
+    .from("plan_cuentas")
+    .select("codigo, tipo")
+    .in("codigo", todasCuentasDoc);
+
+  const ctaTipos: Record<string, string> = {};
+  for (const c of planCtas || []) ctaTipos[c.codigo] = c.tipo;
+
+  // 5. Build pending documents map: { rut: { CXC: [docs], CXP: [docs] } }
+  type DocPendiente = { tipoDoc: string; numDoc: string; saldo: number; cuenta: string };
+  const docsTemp: Record<string, { cargos: number; abonos: number; tipoDoc: string; numDoc: string; cuenta: string; rut: string }> = {};
+
+  for (const m of movsDoc) {
+    const auxRut = (m.auxiliar_rut || "").toUpperCase();
+    if (!rutsNecesarios.has(auxRut)) continue;
+
+    const refTipo = m.referencia?.split("|")[0] || m.tipo_doc || "";
+    const refNum = m.referencia?.split("|")[1] || m.num_doc || "";
+    if (!refTipo || !refNum) continue;
+
+    const clave = `${auxRut}|${m.cuenta_codigo}|${refTipo}|${refNum}`;
+    if (!docsTemp[clave]) {
+      docsTemp[clave] = { cargos: 0, abonos: 0, tipoDoc: refTipo, numDoc: refNum, cuenta: m.cuenta_codigo, rut: auxRut };
+    }
+    docsTemp[clave].cargos += Number(m.debe) || 0;
+    docsTemp[clave].abonos += Number(m.haber) || 0;
+  }
+
+  const docsPorRUT: Record<string, { CXC: DocPendiente[]; CXP: DocPendiente[] }> = {};
+
+  for (const d of Object.values(docsTemp)) {
+    const esActivo = ctaTipos[d.cuenta] === "A";
+    const saldo = esActivo ? (d.cargos - d.abonos) : (d.abonos - d.cargos);
+    if (Math.abs(saldo) < 1) continue;
+
+    if (!docsPorRUT[d.rut]) docsPorRUT[d.rut] = { CXC: [], CXP: [] };
+
+    const doc: DocPendiente = { tipoDoc: d.tipoDoc, numDoc: d.numDoc, saldo: Math.abs(saldo), cuenta: d.cuenta };
+    if (cuentasCXC.includes(d.cuenta)) docsPorRUT[d.rut].CXC.push(doc);
+    else docsPorRUT[d.rut].CXP.push(doc);
+  }
+
+  // 6. Matching + contabilización
   const matches: MatchResult["details"] = [];
   const usedCartolas = new Set<number>();
 
-  // Helper: date diff in days
-  function daysDiff(d1: string, d2: string): number {
-    const t1 = new Date(d1 + "T12:00:00").getTime();
-    const t2 = new Date(d2 + "T12:00:00").getTime();
-    return Math.abs(t1 - t2) / (1000 * 60 * 60 * 24);
+  // Group pendientes by RUT
+  const porRUT: Record<string, PendienteMov[]> = {};
+  for (const p of pendientes) {
+    if (!porRUT[p.rut]) porRUT[p.rut] = [];
+    porRUT[p.rut].push(p);
   }
 
-  // Pass 1: Exact match (same amount + same type + date ±2 days)
-  for (const cart of pendientes) {
-    if (usedCartolas.has(cart.id)) continue;
-    const montoCart = Math.abs(Number(cart.monto));
-    const tipoCart = cart.cargo_abono;
+  for (const rut of Object.keys(porRUT)) {
+    const rutDocs = docsPorRUT[rut];
+    if (!rutDocs) continue;
 
-    // Find candidates with exact amount, same type, closest date within 2 days
-    const exactCandidates = candidates
-      .filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart && daysDiff(cart.fecha || "", c.fecha) <= 2)
-      .sort((a, b) => daysDiff(cart.fecha || "", a.fecha) - daysDiff(cart.fecha || "", b.fecha));
+    for (const mov of porRUT[rut]) {
+      if (usedCartolas.has(mov.id)) continue;
 
-    if (exactCandidates.length === 1 || (exactCandidates.length > 0 && daysDiff(cart.fecha || "", exactCandidates[0].fecha) === 0)) {
-      const best = exactCandidates[0];
-      best.used = true;
-      usedCartolas.add(cart.id);
-      matches.push({
-        cartola_id: cart.id,
-        comprobante_id: best.comprobante_id,
-        monto: montoCart,
-        fecha_cartola: cart.fecha || "",
-        fecha_comprobante: best.fecha,
-        tipo_match: "exacto",
-      });
-    }
-  }
+      const docsPool = mov.esAbono ? rutDocs.CXC : rutDocs.CXP;
+      if (!docsPool || docsPool.length === 0) continue;
 
-  // Pass 2: Amount match (same amount + same type, within same month)
-  for (const cart of pendientes) {
-    if (usedCartolas.has(cart.id)) continue;
-    const montoCart = Math.abs(Number(cart.monto));
-    const tipoCart = cart.cargo_abono;
+      const tipoContab = mov.esAbono ? "COBRANZA" : "PAGO";
+      const cuentaContra = mov.esAbono ? ctaClientes : ctaProveedores;
+      const categoriaFlujo = mov.esAbono ? "OP-COB" : "OP-PROV";
 
-    const amountCandidates = candidates
-      .filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart)
-      .sort((a, b) => daysDiff(cart.fecha || "", a.fecha) - daysDiff(cart.fecha || "", b.fecha));
+      // a) Exact match: single document = cartola amount
+      let matchedDocs: DocPendiente[] | null = null;
+      let matchTipo: "exacto" | "combinado" = "exacto";
 
-    // Only match if there's exactly one candidate for this amount (1:1)
-    const allSameAmount = candidates.filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart);
-    const allSameAmountCartolas = pendientes.filter((p) => !usedCartolas.has(p.id) && Math.abs(Math.abs(Number(p.monto)) - montoCart) < 1 && p.cargo_abono === tipoCart);
-
-    if (amountCandidates.length === 1 && allSameAmountCartolas.length === 1) {
-      const best = amountCandidates[0];
-      best.used = true;
-      usedCartolas.add(cart.id);
-      matches.push({
-        cartola_id: cart.id,
-        comprobante_id: best.comprobante_id,
-        monto: montoCart,
-        fecha_cartola: cart.fecha || "",
-        fecha_comprobante: best.fecha,
-        tipo_match: "monto",
-      });
-    }
-  }
-
-  // Pass 3: Document match (bank description contains a doc number that exists in candidate)
-  for (const cart of pendientes) {
-    if (usedCartolas.has(cart.id)) continue;
-    const desc = (cart.descripcion || "").toLowerCase();
-    const numDocCart = (cart.num_doc || "").trim();
-    const tipoCart = cart.cargo_abono;
-
-    if (!numDocCart && !desc) continue;
-
-    for (const cand of candidates) {
-      if (cand.used || cand.cargo_abono !== tipoCart) continue;
-      const candDoc = (cand.num_doc || "").trim();
-
-      if (candDoc && candDoc.length >= 3) {
-        // Check if cartola description or num_doc contains the accounting doc number
-        if ((numDocCart && numDocCart === candDoc) || (desc && desc.includes(candDoc.toLowerCase()))) {
-          // Verify amounts are close enough (within 10% tolerance for partial payments)
-          const montoCart = Math.abs(Number(cart.monto));
-          if (Math.abs(cand.monto - montoCart) < 1) {
-            cand.used = true;
-            usedCartolas.add(cart.id);
-            matches.push({
-              cartola_id: cart.id,
-              comprobante_id: cand.comprobante_id,
-              monto: montoCart,
-              fecha_cartola: cart.fecha || "",
-              fecha_comprobante: cand.fecha,
-              tipo_match: "documento",
-            });
-            break;
+      const exactIdx = docsPool.findIndex((d) => Math.abs(d.saldo - mov.monto) < 1);
+      if (exactIdx >= 0) {
+        matchedDocs = [docsPool[exactIdx]];
+        docsPool.splice(exactIdx, 1);
+      } else {
+        // b) Combined match: accumulate docs until sum = amount
+        const sorted = docsPool.slice().sort((a, b) => b.saldo - a.saldo);
+        let acum = 0;
+        const combo: { doc: DocPendiente; idx: number }[] = [];
+        for (let i = 0; i < sorted.length; i++) {
+          if (acum + sorted[i].saldo <= mov.monto + 1) {
+            acum += sorted[i].saldo;
+            combo.push({ doc: sorted[i], idx: docsPool.indexOf(sorted[i]) });
           }
+          if (Math.abs(acum - mov.monto) < 1) break;
+        }
+        if (combo.length > 0 && Math.abs(acum - mov.monto) < 1) {
+          matchedDocs = combo.map((c) => c.doc);
+          matchTipo = "combinado";
+          // Remove used docs from pool (reverse order to preserve indices)
+          const indices = combo.map((c) => c.idx).filter((i) => i >= 0).sort((a, b) => b - a);
+          for (const idx of indices) docsPool.splice(idx, 1);
         }
       }
-    }
-  }
 
-  // 6. Save matches to database
-  if (matches.length > 0) {
-    for (const m of matches) {
+      if (!matchedDocs) continue;
+
+      // Create comprobante
+      const docsDesc = matchedDocs.map((d) => `${d.tipoDoc} ${d.numDoc}`).join(", ");
+      const glosa = `${mov.esAbono ? "Cobranza" : "Pago"} ${docsDesc}`;
+      const cuentaDocUsada = matchedDocs[0].cuenta || cuentaContra;
+
+      type Linea = {
+        cuenta_codigo: string; debe: number; haber: number; glosa: string;
+        auxiliar_rut: string; tipo_doc: string; num_doc: string;
+        fecha_doc: string | null; referencia: string;
+      };
+
+      const lineas: Linea[] = [];
+
+      // Bank line
+      lineas.push({
+        cuenta_codigo: ctaBanco,
+        debe: mov.esAbono ? mov.monto : 0,
+        haber: mov.esAbono ? 0 : mov.monto,
+        glosa,
+        auxiliar_rut: "",
+        tipo_doc: "",
+        num_doc: "",
+        fecha_doc: null,
+        referencia: "",
+      });
+
+      // One contra line per matched doc (for proper document tracking)
+      for (const doc of matchedDocs) {
+        lineas.push({
+          cuenta_codigo: cuentaDocUsada,
+          debe: mov.esAbono ? 0 : doc.saldo,
+          haber: mov.esAbono ? doc.saldo : 0,
+          glosa,
+          auxiliar_rut: rut,
+          tipo_doc: doc.tipoDoc,
+          num_doc: doc.numDoc,
+          fecha_doc: mov.fecha,
+          referencia: `${doc.tipoDoc}|${doc.numDoc}`,
+        });
+      }
+
+      const tipoComp = mov.esAbono ? "I" : "E";
+      const result = await crearComprobante({
+        tipo: tipoComp,
+        fecha: mov.fecha,
+        glosa,
+        lineas,
+      });
+
+      if (result.error) continue;
+
+      // Mark cartola as contabilized
       await supabase
         .from("cartolas")
         .update({
           contabilizado: true,
-          comprobante_id: m.comprobante_id,
+          comprobante_id: result.data!.id,
+          categoria_flujo: categoriaFlujo,
         })
-        .eq("id", m.cartola_id);
-    }
+        .eq("id", mov.id);
 
+      usedCartolas.add(mov.id);
+      matches.push({
+        cartola_id: mov.id,
+        comprobante_id: result.data!.id,
+        monto: mov.monto,
+        fecha_cartola: mov.fecha,
+        receptor: rut,
+        tipo_match: matchTipo,
+        docs: docsDesc,
+      });
+    }
+  }
+
+  if (matches.length > 0) {
     revalidatePath("/contable/conciliacion");
   }
 

@@ -671,16 +671,15 @@ export default function ConciliacionClient({
                 {matchResult.details.map((d, i) => (
                   <div key={i} className="bg-white rounded-lg p-2.5 border border-indigo-100 text-xs">
                     <div className="flex items-center justify-between">
-                      <span className="font-mono font-semibold text-gray-900">{formatMonto(d.monto)}</span>
+                      <span className="font-mono font-semibold text-gray-900">${formatMonto(d.monto)}</span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                         d.tipo_match === "exacto" ? "bg-emerald-100 text-emerald-700" :
-                        d.tipo_match === "monto" ? "bg-blue-100 text-blue-700" :
-                        "bg-purple-100 text-purple-700"
+                        "bg-blue-100 text-blue-700"
                       }`}>
-                        {d.tipo_match === "exacto" ? "Exacto" : d.tipo_match === "monto" ? "Monto" : "Documento"}
+                        {d.tipo_match === "exacto" ? "Exacto" : "Combinado"}
                       </span>
                     </div>
-                    <p className="text-gray-500 mt-1">Cartola: {d.fecha_cartola} / Comp: {d.fecha_comprobante}</p>
+                    <p className="text-gray-500 mt-1">{d.fecha_cartola} · {d.receptor} · {d.docs}</p>
                   </div>
                 ))}
               </div>

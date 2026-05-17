@@ -151,23 +151,26 @@ export async function crearUsuario(data: { email: string; password: string; nomb
   if (existing) return { error: "Ya existe un usuario con ese email" };
 
   const res = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/signup`,
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users`,
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
       },
       body: JSON.stringify({
         email: data.email,
         password: data.password,
+        email_confirm: true,
       }),
     }
   );
 
   const result = await res.json();
   if (!res.ok || result.error) {
-    return { error: result.error?.message || result.msg || "Error al crear usuario en auth" };
+    const msg = result.error?.message || result.msg || result.message || "Error al crear usuario en auth";
+    return { error: msg };
   }
 
   const userId = result.id || result.user?.id;
