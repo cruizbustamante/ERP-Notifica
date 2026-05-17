@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import { getLibroMayor, getLibroMayorCompleto, type LibroMayorResult } from "./actions";
 import * as XLSX from "xlsx";
 
@@ -187,7 +188,7 @@ export default function LibroMayorClient({
                   <tr key={i} className="border-b hover:bg-gray-50">
                     <td className="px-4 py-1.5 whitespace-nowrap">{m.fecha}</td>
                     <td className="px-4 py-1.5 font-mono text-xs">{m.comprobante}</td>
-                    <td className="px-4 py-1.5 font-mono text-xs">{m.auxiliar_rut}</td>
+                    <td className="px-4 py-1.5 font-mono text-xs">{formatRut(m.auxiliar_rut)}</td>
                     <td className="px-4 py-1.5 text-xs">{m.tipo_doc && `${m.tipo_doc} ${m.num_doc}`}</td>
                     <td className="px-4 py-1.5 text-right font-mono">{m.debe > 0 ? formatMonto(m.debe) : ""}</td>
                     <td className="px-4 py-1.5 text-right font-mono">{m.haber > 0 ? formatMonto(m.haber) : ""}</td>

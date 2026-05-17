@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useRef, useCallback } from "react";
 import { TIPOS_COMPROBANTE, formatNumero } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import { getDocumentosAbiertos } from "./actions";
 
 type Cuenta = {
@@ -151,8 +152,13 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
     });
   }
 
-  function handleSelectAuxiliar(key: number, aux: Auxiliar) {
+  async function handleSelectAuxiliar(key: number, aux: Auxiliar) {
     updateLinea(key, { auxiliar_rut: aux.rut, auxiliar_nombre: aux.razon_social });
+    const linea = lineas.find((l) => l.key === key);
+    if (linea && linea.modo_doc === "REBAJA" && linea.cuenta_codigo) {
+      const result = await getDocumentosAbiertos(linea.cuenta_codigo, aux.rut);
+      updateLinea(key, { docs_abiertos: result.data || [] });
+    }
   }
 
   async function handleModoDoc(linea: Linea, modo: "REGISTRO" | "REBAJA") {
@@ -302,7 +308,7 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
   const filteredAux = useMemo(() => {
     if (!auxSearch) return auxiliares.slice(0, 20);
     const q = auxSearch.toLowerCase();
-    return auxiliares.filter((a) => a.rut.includes(q) || a.razon_social.toLowerCase().includes(q)).slice(0, 20);
+    return auxiliares.filter((a) => a.rut.replace(/\./g, "").includes(q.replace(/\./g, "")) || a.razon_social.toLowerCase().includes(q)).slice(0, 20);
   }, [auxiliares, auxSearch]);
 
   return (
@@ -390,7 +396,7 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
           <label className="block text-[11px] font-medium text-gray-500 mb-1">Auxiliar</label>
           {linea.auxiliar_rut ? (
             <div className="flex items-center gap-2 bg-amber-50/50 border border-amber-100 rounded-xl px-3 py-2.5">
-              <span className="text-sm font-mono font-medium text-amber-800">{linea.auxiliar_rut}</span>
+              <span className="text-sm font-mono font-medium text-amber-800">{formatRut(linea.auxiliar_rut)}</span>
               <span className="text-sm text-gray-600 truncate flex-1">{linea.auxiliar_nombre}</span>
               <button type="button" onClick={() => {
                 onUpdate({ auxiliar_rut: "", auxiliar_nombre: "", docs_abiertos: [], referencia: "" });
@@ -412,7 +418,7 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => { onSelectAuxiliar(a); setAuxOpen(false); setAuxSearch(""); }}
                       className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm flex gap-3 border-b border-gray-50 last:border-0 transition">
-                      <span className="font-mono text-amber-700 shrink-0">{a.rut}</span>
+                      <span className="font-mono text-amber-700 shrink-0">{formatRut(a.rut)}</span>
                       <span className="text-gray-700 truncate">{a.razon_social}</span>
                     </button>
                   ))}

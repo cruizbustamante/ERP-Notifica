@@ -74,6 +74,7 @@ const NAV_SECTIONS = [
       { label: "Categorías Flujo", href: "/configuracion?tab=categorias" },
       { label: "Tipos Documento", href: "/configuracion?tab=documentos" },
       { label: "Planes", href: "/configuracion?tab=planes" },
+      { label: "Usuarios", href: "/configuracion?tab=usuarios" },
     ],
   },
 ];

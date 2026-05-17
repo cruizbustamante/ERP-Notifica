@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 
 type Documento = {
   id: number;
@@ -50,7 +51,7 @@ export default function FacturacionClient({ anio, documentos, resumenMensual, to
     }
     if (buscar) {
       const q = buscar.toLowerCase();
-      return d.razon_social.toLowerCase().includes(q) || d.rut_receptor.includes(q) || d.folio.includes(q);
+      return d.razon_social.toLowerCase().includes(q) || d.rut_receptor.replace(/\./g, "").includes(q.replace(/\./g, "")) || d.folio.includes(q);
     }
     return true;
   });
@@ -151,7 +152,7 @@ export default function FacturacionClient({ anio, documentos, resumenMensual, to
                     </td>
                     <td className="px-3 py-1.5 font-mono text-xs">{d.folio}</td>
                     <td className="px-3 py-1.5 text-xs">{d.fecha_emision}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs">{d.rut_receptor}</td>
+                    <td className="px-3 py-1.5 font-mono text-xs">{formatRut(d.rut_receptor)}</td>
                     <td className="px-4 py-1.5 max-w-[200px] truncate">{d.razon_social}</td>
                     <td className="px-3 py-1.5 text-right font-mono text-xs">{formatMonto(d.monto_neto)}</td>
                     <td className="px-3 py-1.5 text-right font-mono text-xs">{formatMonto(d.monto_iva)}</td>

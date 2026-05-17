@@ -9,7 +9,28 @@
       "mcp__plugin_supabase_supabase__get_publishable_keys",
       "mcp__plugin_supabase_supabase__get_project_url",
       "mcp__plugin_supabase_supabase__apply_migration",
-      "mcp__plugin_supabase_supabase__get_logs"
+      "mcp__plugin_supabase_supabase__get_logs",
+      "Bash(Get-ChildItem *)",
+      "Bash(Select-Object FullName)",
+      "Bash(Select-Object Name, FullName)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:doc-0s-bg-sheets.googleusercontent.com)",
+      "Bash(npx vercel *)",
+      "Bash(xargs grep -i \"notifica\\\\|#[0-9a-fA-F]\\\\|color\")",
+      "Bash(npm install *)",
+      "Bash(Select-Object -First 20)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Select-Object Name)",
+      "Bash(npx sharp-cli *)",
+      "Bash(Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue)",
+      "Bash(xargs grep -l \"user_roles\\\\|usuarios\")",
+      "mcp__plugin_supabase_supabase__list_tables"
     ]
   }
 }

@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { normalizeRut } from "@/lib/rut";
 import SuscripcionesClient from "./SuscripcionesClient";
 
 export default async function SuscripcionesPage() {
@@ -14,7 +15,7 @@ export default async function SuscripcionesPage() {
   const clienteMap = new Map<string, { razon_social: string; porMes: number[] }>();
 
   for (const v of ventas || []) {
-    const rut = v.rut_receptor;
+    const rut = normalizeRut(v.rut_receptor);
     if (!rut || !v.mes) continue;
 
     const monto = Math.abs(Number(v.monto_total) || 0);

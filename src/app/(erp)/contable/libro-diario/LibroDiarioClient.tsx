@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { formatMonto, MESES, TIPOS_COMPROBANTE } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import { getLibroDiario, type ComprobanteConLineas } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -127,7 +128,7 @@ export default function LibroDiarioClient({
                                 <span className="text-gray-500 ml-1">{l.cuenta_nombre}</span>
                               </td>
                               <td className="py-1 text-gray-600 truncate max-w-[200px]">{l.glosa}</td>
-                              <td className="py-1 font-mono">{l.auxiliar_rut}</td>
+                              <td className="py-1 font-mono">{formatRut(l.auxiliar_rut)}</td>
                               <td className="py-1">{l.tipo_doc && `${l.tipo_doc} ${l.num_doc}`}</td>
                               <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
                               <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>

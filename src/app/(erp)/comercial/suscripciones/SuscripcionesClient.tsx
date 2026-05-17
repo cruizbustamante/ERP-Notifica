@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 
 type ClienteMRR = {
   rut: string;
@@ -101,7 +102,7 @@ export default function SuscripcionesClient({ anio, clientes, mrrPorMes, totalMR
                 <tr key={c.rut} className="border-b hover:bg-gray-50">
                   <td className="px-4 py-1.5 sticky left-0 bg-white">
                     <div className="font-medium">{c.razon_social}</div>
-                    <div className="font-mono text-xs text-gray-400">{c.rut}</div>
+                    <div className="font-mono text-xs text-gray-400">{formatRut(c.rut)}</div>
                   </td>
                   {c.porMes.map((v, i) => (
                     <td key={i} className="px-2 py-1.5 text-right font-mono text-xs">
@@ -136,7 +137,7 @@ export default function SuscripcionesClient({ anio, clientes, mrrPorMes, totalMR
               <tbody>
                 {noRecurrentes.map((c) => (
                   <tr key={c.rut} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-1.5 font-mono text-xs">{c.rut}</td>
+                    <td className="px-4 py-1.5 font-mono text-xs">{formatRut(c.rut)}</td>
                     <td className="px-4 py-1.5">{c.razon_social}</td>
                     <td className="px-3 py-1.5 text-right">{c.mesesActivos}</td>
                     <td className="px-4 py-1.5 text-right font-mono">{formatMonto(c.totalAnio)}</td>

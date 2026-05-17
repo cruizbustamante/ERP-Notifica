@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 
 type ClienteCobranza = {
   rut: string;
@@ -58,7 +59,7 @@ function SeccionNivel({ nivel, clientes }: { nivel: keyof typeof NIVELES; client
         <tbody>
           {clientes.map((c) => (
             <tr key={c.rut} className="border-b last:border-b-0 hover:bg-white/50">
-              <td className="px-4 py-2 font-mono text-xs">{c.rut}</td>
+              <td className="px-4 py-2 font-mono text-xs">{formatRut(c.rut)}</td>
               <td className="px-4 py-2 font-medium">{c.razon_social}</td>
               <td className="px-3 py-2 text-xs text-gray-600">
                 {c.email && <div>{c.email}</div>}

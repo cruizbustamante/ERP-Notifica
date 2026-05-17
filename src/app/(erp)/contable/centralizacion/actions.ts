@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { crearComprobante } from "../comprobantes/actions";
 import { revalidatePath } from "next/cache";
+import { normalizeRut } from "@/lib/rut";
 
 const MAPA_DTE: Record<number, string> = {
   33: "FAC", 34: "FEX", 39: "BV", 41: "BVE",
@@ -184,7 +185,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
 
     const docsHon: DocHonorario[] = (data || []).map((r) => ({
       id: r.id,
-      rut: r.rut_emisor || "",
+      rut: normalizeRut(r.rut_emisor || ""),
       razon_social: r.razon_social || "",
       folio: r.folio || "",
       fecha_emision: r.fecha_emision,
@@ -229,7 +230,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
       tipo_dte: dte,
       tipo_dte_nombre: r.tipo_dte_nombre || MAPA_DTE[dte] || String(dte),
       folio: r.folio || "",
-      rut: tipo === "ventas" ? (r.rut_receptor || "") : (r.rut_emisor || ""),
+      rut: normalizeRut(tipo === "ventas" ? (r.rut_receptor || "") : (r.rut_emisor || "")),
       razon_social: r.razon_social || "",
       fecha_emision: r.fecha_emision,
       monto_neto: Number(r.monto_neto) || 0,
@@ -276,7 +277,7 @@ export async function previsualizarCentralizacion(
   if (docIds.length === 0) return { lineas: [], totalDebe: 0, totalHaber: 0, error: "No hay documentos seleccionados" };
 
   const reglas = await getReglas(tipo.toUpperCase());
-  const reglasMap = new Map(reglas.map((r) => [r.rut, r.cuenta_codigo]));
+  const reglasMap = new Map(reglas.map((r) => [normalizeRut(r.rut), r.cuenta_codigo]));
 
   type LineaComp = {
     cuenta_codigo: string; debe: number; haber: number; glosa: string;
@@ -333,7 +334,7 @@ export async function centralizarDocumentos(
 
   // Cargar reglas de cuenta por proveedor/cliente
   const reglas = await getReglas(tipo.toUpperCase());
-  const reglasMap = new Map(reglas.map((r) => [r.rut, r.cuenta_codigo]));
+  const reglasMap = new Map(reglas.map((r) => [normalizeRut(r.rut), r.cuenta_codigo]));
 
   type LineaComp = {
     cuenta_codigo: string; debe: number; haber: number; glosa: string;
@@ -477,11 +478,13 @@ export async function cargarExcelVentas(registros: Array<{
   const errores: string[] = [];
 
   const records = registros.map((r) => {
-    const huellaStr = `V|${r.tipo_dte}|${r.folio}|${r.rut_receptor}|${r.fecha_emision}|${Math.round(r.monto_total)}`;
+    const rutNorm = normalizeRut(r.rut_receptor);
+    const huellaStr = `V|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(r.monto_total)}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
     const [year, month] = r.fecha_emision.split("-").map(Number);
     return {
       ...r,
+      rut_receptor: rutNorm,
       huella,
       anio: year,
       mes: month,
@@ -525,13 +528,15 @@ export async function cargarExcelCompras(registros: Array<{
   const errores: string[] = [];
 
   const records = registros.map((r) => {
-    const huellaStr = `C|${r.tipo_dte}|${r.folio}|${r.rut_emisor}|${r.fecha_emision}|${Math.round(r.monto_total)}`;
+    const rutNorm = normalizeRut(r.rut_emisor);
+    const huellaStr = `C|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(r.monto_total)}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
     // Compras: mes contable = fecha_recepcion (cuando entra al libro SII)
     const fechaMes = r.fecha_recepcion || r.fecha_emision;
     const [year, month] = fechaMes.split("-").map(Number);
     return {
       ...r,
+      rut_emisor: rutNorm,
       huella,
       anio: year,
       mes: month,
@@ -569,11 +574,13 @@ export async function cargarExcelHonorarios(registros: Array<{
   const errores: string[] = [];
 
   const records = registros.map((r) => {
-    const huellaStr = `H|${r.folio}|${r.rut_emisor}|${r.fecha_emision}|${Math.round(r.monto_bruto)}`;
+    const rutNorm = normalizeRut(r.rut_emisor);
+    const huellaStr = `H|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(r.monto_bruto)}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
     const [year, month] = r.fecha_emision.split("-").map(Number);
     return {
       ...r,
+      rut_emisor: rutNorm,
       huella,
       anio: year,
       mes: month,
@@ -602,7 +609,7 @@ function formatCLP(n: number) { return "$" + Math.round(n).toLocaleString("es-CL
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function ensureAuxiliares(supabase: any, items: { rut: string; razon_social: string }[], tipoAux: string) {
-  const rutsUnicos = [...new Set(items.map((d) => d.rut).filter(Boolean))];
+  const rutsUnicos = [...new Set(items.map((d) => normalizeRut(d.rut)).filter(Boolean))];
   if (rutsUnicos.length === 0) return;
 
   const { data: existentes } = await supabase.from("auxiliares").select("rut").in("rut", rutsUnicos);
@@ -611,7 +618,7 @@ async function ensureAuxiliares(supabase: any, items: { rut: string; razon_socia
 
   if (faltantes.length > 0) {
     const nuevos = faltantes.map((rut) => {
-      const item = items.find((d) => d.rut === rut);
+      const item = items.find((d) => normalizeRut(d.rut) === rut);
       return { rut, razon_social: item?.razon_social || "", tipo: tipoAux, estado: "S" };
     });
     await supabase.from("auxiliares").insert(nuevos);

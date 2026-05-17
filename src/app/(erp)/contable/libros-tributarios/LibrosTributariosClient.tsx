@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import { getLibroVentas, getLibroCompras, getLibroHonorarios, type DocTributario, type DocHonorarioTrib } from "./actions";
 import * as XLSX from "xlsx";
 
@@ -158,7 +159,7 @@ export default function LibrosTributariosClient({
                   </td>
                   <td className="px-3 py-1.5 font-mono">{d.folio}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap">{d.fecha_emision}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs">{d.rut}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
                   <td className="px-3 py-1.5 truncate max-w-[200px]">{d.razon_social}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{d.monto_exento > 0 ? formatMonto(d.monto_exento) : ""}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{formatMonto(d.monto_neto)}</td>
@@ -211,7 +212,7 @@ export default function LibrosTributariosClient({
               {docsHon.map((d) => (
                 <tr key={d.id} className="border-b hover:bg-gray-50">
                   <td className="px-3 py-1.5 font-mono">{d.folio}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs">{d.rut}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
                   <td className="px-3 py-1.5 truncate max-w-[200px]">{d.razon_social}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap">{d.fecha_emision}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{formatMonto(d.monto_bruto)}</td>

@@ -9,11 +9,13 @@ export default async function ConfiguracionPage() {
     { data: categorias },
     { data: tiposDoc },
     { data: planes },
+    { data: usuarios },
   ] = await Promise.all([
     supabase.from("config").select("clave, valor"),
     supabase.from("categoria_flujo").select("*").order("orden"),
     supabase.from("tipos_documento").select("*").order("codigo"),
     supabase.from("planes").select("*").order("codigo"),
+    supabase.from("user_roles").select("*").order("created_at"),
   ]);
 
   const config: Record<string, string> = {};
@@ -25,6 +27,7 @@ export default async function ConfiguracionPage() {
       categorias={categorias || []}
       tiposDoc={tiposDoc || []}
       planes={planes || []}
+      usuarios={usuarios || []}
     />
   );
 }

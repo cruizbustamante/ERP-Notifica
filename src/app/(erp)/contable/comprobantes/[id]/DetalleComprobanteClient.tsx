@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { TIPOS_COMPROBANTE, formatNumero } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import { actualizarComprobante } from "../actions";
 import ComprobanteForm, { ComprobanteFormData } from "../ComprobanteForm";
 import Link from "next/link";
@@ -197,7 +198,7 @@ export default function DetalleComprobanteClient({ comprobante, cuentas, tiposDo
                         {cuenta && <span className="ml-2 text-xs text-gray-500">{cuenta.nombre}</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600 max-w-[200px] truncate">{l.glosa}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-500">{l.auxiliar_rut || "—"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : "—"}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">
                         {l.tipo_doc ? `${l.tipo_doc} ${l.num_doc}` : "—"}
                       </td>

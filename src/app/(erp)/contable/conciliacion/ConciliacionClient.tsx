@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useCallback } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import {
   getResumenCartola,
   getMovimientosCartola,
@@ -295,7 +296,7 @@ export default function ConciliacionClient({
         : cuentas.filter((c) => c.tipo === "I");
 
   const auxFiltrados = busqAux
-    ? auxiliares.filter((a) => a.rut.includes(busqAux) || a.razon_social.toLowerCase().includes(busqAux.toLowerCase())).slice(0, 10)
+    ? auxiliares.filter((a) => a.rut.replace(/\./g, "").includes(busqAux.replace(/\./g, "")) || a.razon_social.toLowerCase().includes(busqAux.toLowerCase())).slice(0, 10)
     : [];
 
   const porcentajeContab = stats.totalMovs > 0 ? Math.round((stats.contabilizados / stats.totalMovs) * 100) : 0;
@@ -854,7 +855,7 @@ export default function ConciliacionClient({
                 <div className="absolute z-10 w-full border border-gray-200 rounded-lg mt-1 max-h-40 overflow-y-auto text-sm bg-white shadow-lg">
                   {auxFiltrados.map((a) => (
                     <button key={a.rut} onClick={() => { setFormAuxiliar(a.rut); setBusqAux(a.rut); }} className="block w-full text-left px-3 py-2 hover:bg-indigo-50 border-b border-gray-50 last:border-0">
-                      <span className="font-mono text-indigo-600">{a.rut}</span> <span className="text-gray-600">— {a.razon_social}</span>
+                      <span className="font-mono text-indigo-600">{formatRut(a.rut)}</span> <span className="text-gray-600">— {a.razon_social}</span>
                     </button>
                   ))}
                 </div>

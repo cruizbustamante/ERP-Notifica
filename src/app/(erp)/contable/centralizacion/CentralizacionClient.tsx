@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useRef } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import { normalizeRut, formatRut } from "@/lib/rut";
 import * as XLSX from "xlsx";
 import {
   getResumenCentralizacion,
@@ -590,7 +591,7 @@ export default function CentralizacionClient({
                             </span>
                           </td>
                           <td className="py-1.5 font-mono">{d.folio}</td>
-                          <td className="py-1.5 font-mono text-xs">{d.rut}</td>
+                          <td className="py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
                           <td className="py-1.5 truncate max-w-[180px]">{d.razon_social}</td>
                           <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_neto)}</td>
                           <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_iva)}</td>
@@ -715,7 +716,7 @@ export default function CentralizacionClient({
                         <tr key={d.id} className="border-b last:border-0 hover:bg-gray-50">
                           <td className="py-1.5"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => toggleDoc(d.id)} /></td>
                           <td className="py-1.5 font-mono">{d.folio}</td>
-                          <td className="py-1.5 font-mono text-xs">{d.rut}</td>
+                          <td className="py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
                           <td className="py-1.5 truncate max-w-[200px]">{d.razon_social}</td>
                           <td className="py-1.5 text-xs">{d.fecha_emision}</td>
                           <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_bruto)}</td>
@@ -851,7 +852,7 @@ export default function CentralizacionClient({
               <tbody>
                 {reglasLibro.map((r) => (
                   <tr key={r.id} className="border-b last:border-0 hover:bg-gray-50">
-                    <td className="py-2 font-mono text-xs">{r.rut}</td>
+                    <td className="py-2 font-mono text-xs">{formatRut(r.rut)}</td>
                     <td className="py-2">{r.razon_social}</td>
                     <td className="py-2 font-mono text-xs">{r.cuenta_codigo}</td>
                     <td className="py-2 text-center">
@@ -929,7 +930,7 @@ function parseSIIVentas(rows: Record<string, string>[]) {
       const tipoDte = num(r["Tipo Doc"]);
       const folio = col(r, "Folio");
       const fecha = parseDate(col(r, "Fecha Docto"));
-      const rut = col(r, "RUT Receptor");
+      const rut = normalizeRut(col(r, "RUT Receptor"));
       return {
         tipo_dte: tipoDte,
         tipo_dte_nombre: MAPA_DTE[tipoDte] || `DTE${tipoDte}`,
@@ -950,7 +951,7 @@ function parseSIIVentas(rows: Record<string, string>[]) {
     const tipoDte = num(col(r, "Tipo Doc"));
     const folio = col(r, "Folio");
     const fecha = parseDate(col(r, "Fecha Docto"));
-    const rut = col(r, "Rut cliente", "RUT Receptor");
+    const rut = normalizeRut(col(r, "Rut cliente", "RUT Receptor"));
     const razon = col(r, "Razon Social", "Razón Social");
     const tipoDocRef = num(col(r, "Tipo Docto. Referencia"));
     const folioDocRef = col(r, "Folio Docto. Referencia");
@@ -979,7 +980,7 @@ function parseSIICompras(rows: Record<string, string>[]) {
     const folio = col(r, "Folio");
     const fechaDocto = parseDate(col(r, "Fecha Docto"));
     const fechaRecepcion = parseDate(col(r, "Fecha Recepcion", "Fecha Recepción"));
-    const rut = col(r, "RUT Proveedor", "Rut Emisor", "RUT Emisor");
+    const rut = normalizeRut(col(r, "RUT Proveedor", "Rut Emisor", "RUT Emisor"));
     const razon = col(r, "Razon Social", "Razón Social");
     return {
       tipo_dte: tipoDte,
@@ -1020,7 +1021,7 @@ function parseSIIHonorarios(rows: Record<string, string>[]) {
       .map((r) => {
         const folio = String(r[firstKey] || "").trim();
         const fechaRaw = (r["__EMPTY"] || "").trim();
-        const rut = (r["__EMPTY_3"] || "").trim();
+        const rut = normalizeRut((r["__EMPTY_3"] || "").trim());
         const razon = (r["__EMPTY_4"] || "").trim();
         const bruto = num(r["__EMPTY_6"]);
         const retencion = num(r["__EMPTY_7"]);
@@ -1043,7 +1044,7 @@ function parseSIIHonorarios(rows: Record<string, string>[]) {
 
   // Formato CSV con headers normales
   return rows.map((r) => {
-    const rut = col(r, "RUT Emisor", "Rut Emisor", "RUT", "Rut");
+    const rut = normalizeRut(col(r, "RUT Emisor", "Rut Emisor", "RUT", "Rut"));
     const razon = col(r, "Razon Social", "Razón Social", "Nombre");
     const folio = col(r, "Folio", "N° Boleta", "Nro Boleta");
     const fecha = parseDate(col(r, "Fecha", "Fecha Emision", "Fecha Docto"));

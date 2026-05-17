@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { normalizeRut } from "@/lib/rut";
 import ClientesClient from "./ClientesClient";
 
 export default async function ClientesPage() {
@@ -20,7 +21,7 @@ export default async function ClientesPage() {
   // Ventas por cliente
   const ventasMap = new Map<string, { total: number; cant: number; ultima: string | null }>();
   for (const v of ventas || []) {
-    const rut = v.rut_receptor;
+    const rut = normalizeRut(v.rut_receptor);
     if (!rut) continue;
     const total = Math.abs(Number(v.monto_total) || 0);
     const isNC = [61, 111].includes(v.tipo_dte);
@@ -34,17 +35,18 @@ export default async function ClientesPage() {
   // Saldo CxC
   const saldoCxC = new Map<string, number>();
   for (const m of movsCxC || []) {
-    const rut = m.auxiliar_rut || "";
+    const rut = normalizeRut(m.auxiliar_rut || "");
     if (!rut) continue;
     const monto = (Number(m.debe) || 0) - (Number(m.haber) || 0);
     saldoCxC.set(rut, (saldoCxC.get(rut) || 0) + monto);
   }
 
   const clientes = (auxiliares || []).map((a) => {
-    const vta = ventasMap.get(a.rut) || { total: 0, cant: 0, ultima: null };
-    const saldo = saldoCxC.get(a.rut) || 0;
+    const rutNorm = normalizeRut(a.rut);
+    const vta = ventasMap.get(rutNorm) || { total: 0, cant: 0, ultima: null };
+    const saldo = saldoCxC.get(rutNorm) || 0;
     return {
-      rut: a.rut,
+      rut: rutNorm,
       razon_social: a.razon_social,
       giro: a.giro || "",
       email: a.email || "",
@@ -58,7 +60,7 @@ export default async function ClientesPage() {
   });
 
   const fichasNormalized = (fichas || []).map((f) => ({
-    rut: f.rut,
+    rut: normalizeRut(f.rut),
     razon_social: f.razon_social || "",
     email: f.email || "",
     giro: f.giro || "",

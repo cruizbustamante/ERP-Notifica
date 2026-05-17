@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatMonto } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 
 type DocPendiente = {
   auxiliar_rut: string;
@@ -59,7 +60,7 @@ function TablaResumen({ items, color }: { items: ResumenAuxiliar[]; color: strin
       <tbody>
         {items.map((r) => (
           <tr key={r.rut} className="border-b hover:bg-gray-50">
-            <td className="px-4 py-1.5 font-mono text-xs">{r.rut}</td>
+            <td className="px-4 py-1.5 font-mono text-xs">{formatRut(r.rut)}</td>
             <td className="px-4 py-1.5">{r.razon_social}</td>
             <td className="px-2 py-1.5 text-right">{r.docs}</td>
             <td className="px-2 py-1.5 text-right font-mono text-xs">{r.al_dia > 0 ? formatMonto(r.al_dia) : ""}</td>
@@ -92,7 +93,7 @@ function TablaDetalle({ docs }: { docs: DocPendiente[] }) {
       <tbody>
         {docs.map((d, i) => (
           <tr key={`${d.auxiliar_rut}-${d.tipo_doc}-${d.num_doc}-${i}`} className="border-b hover:bg-gray-50">
-            <td className="px-4 py-1.5 font-mono text-xs">{d.auxiliar_rut}</td>
+            <td className="px-4 py-1.5 font-mono text-xs">{formatRut(d.auxiliar_rut)}</td>
             <td className="px-4 py-1.5">{d.razon_social}</td>
             <td className="px-2 py-1.5">{d.tipo_doc}</td>
             <td className="px-2 py-1.5 font-mono text-xs">{d.num_doc}</td>

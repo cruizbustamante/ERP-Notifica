@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatMonto } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -62,7 +63,7 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
     })
     .filter((c) => {
       if (!buscar) return true;
-      const q = buscar.toLowerCase();
+      const q = buscar.toLowerCase().replace(/\./g, "");
       return c.razon_social.toLowerCase().includes(q) || c.rut.includes(q);
     })
     .sort((a, b) => {
@@ -319,7 +320,7 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-gray-800 truncate">{c.razon_social}</p>
-                            <p className="text-[11px] text-gray-400 font-mono">{c.rut}</p>
+                            <p className="text-[11px] text-gray-400 font-mono">{formatRut(c.rut)}</p>
                           </div>
                         </div>
                       </td>
@@ -366,7 +367,7 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
                 </div>
                 <div>
                   <h2 className="text-lg font-bold">{selected.razon_social}</h2>
-                  <p className="text-sm text-white/70">{selected.rut}</p>
+                  <p className="text-sm text-white/70">{formatRut(selected.rut)}</p>
                   <div className="flex gap-2 mt-1.5">
                     {selectedFicha && (
                       <>
@@ -408,7 +409,7 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
                 <div>
                   <p className="text-[11px] text-gray-400 uppercase font-semibold mb-3">👤 Datos del Cliente</p>
                   <div className="space-y-2">
-                    <InfoRow label="RUT" value={selected.rut} />
+                    <InfoRow label="RUT" value={formatRut(selected.rut)} />
                     <InfoRow label="Razón Social" value={selected.razon_social} />
                     <InfoRow label="Giro" value={selectedFicha?.giro || selected.giro || "—"} />
                     <InfoRow label="Dirección" value={selectedFicha?.direccion || "—"} />

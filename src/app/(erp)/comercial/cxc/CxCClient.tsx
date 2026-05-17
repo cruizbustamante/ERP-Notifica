@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { formatMonto } from "@/lib/contabilidad/core";
+import { formatRut } from "@/lib/rut";
 
 type DocPendiente = {
   auxiliar_rut: string;
@@ -34,7 +35,7 @@ export default function CxCClient({ documentos, totalPendiente }: Props) {
   const filtrados = documentos.filter((d) => {
     if (!buscar) return true;
     const q = buscar.toLowerCase();
-    return d.razon_social.toLowerCase().includes(q) || d.auxiliar_rut.includes(q) || d.num_doc.includes(q);
+    return d.razon_social.toLowerCase().includes(q) || d.auxiliar_rut.replace(/\./g, "").includes(q.replace(/\./g, "")) || d.num_doc.includes(q);
   });
 
   return (
@@ -88,7 +89,7 @@ export default function CxCClient({ documentos, totalPendiente }: Props) {
             <tbody>
               {filtrados.map((d, i) => (
                 <tr key={`${d.auxiliar_rut}-${d.tipo_doc}-${d.num_doc}-${i}`} className="border-b hover:bg-gray-50">
-                  <td className="px-4 py-2 font-mono text-xs">{d.auxiliar_rut}</td>
+                  <td className="px-4 py-2 font-mono text-xs">{formatRut(d.auxiliar_rut)}</td>
                   <td className="px-4 py-2">{d.razon_social}</td>
                   <td className="px-3 py-2">{d.tipo_doc}</td>
                   <td className="px-3 py-2 font-mono text-xs">{d.num_doc}</td>

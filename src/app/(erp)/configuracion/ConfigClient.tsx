@@ -10,11 +10,15 @@ import {
   toggleTipoDocumento,
   upsertPlan,
   togglePlan,
+  crearUsuario,
+  actualizarUsuario,
+  toggleUsuario,
 } from "./actions";
 
 type Categoria = { id: number; codigo: string; nombre: string; tipo: string; orden: number; estado: string };
 type TipoDoc = { id: number; codigo: string; nombre: string; abreviatura: string; clasificacion: string; codigo_sii: number; afecto_iva: string; origen: string; estado: string };
 type Plan = { id: number; codigo: string; nombre: string; descripcion: string; valor_base: number; moneda: string; estado: string };
+type Usuario = { id: number; user_id: string; email: string; rol: string; nombre: string; activo: boolean; created_at: string };
 
 const TABS = [
   { key: "empresa", label: "Empresa" },
@@ -22,15 +26,17 @@ const TABS = [
   { key: "categorias", label: "Categorías Flujo" },
   { key: "documentos", label: "Tipos Documento" },
   { key: "planes", label: "Planes" },
+  { key: "usuarios", label: "Usuarios" },
 ];
 
 export default function ConfigClient({
-  config, categorias, tiposDoc, planes,
+  config, categorias, tiposDoc, planes, usuarios,
 }: {
   config: Record<string, string>;
   categorias: Categoria[];
   tiposDoc: TipoDoc[];
   planes: Plan[];
+  usuarios: Usuario[];
 }) {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "empresa";
@@ -92,6 +98,11 @@ export default function ConfigClient({
       {/* Tab: Planes */}
       {tab === "planes" && (
         <TabPlanes planes={planes} isPending={isPending} startTransition={startTransition} showMsg={showMsg} />
+      )}
+
+      {/* Tab: Usuarios */}
+      {tab === "usuarios" && (
+        <TabUsuarios usuarios={usuarios} isPending={isPending} startTransition={startTransition} showMsg={showMsg} />
       )}
     </div>
   );
@@ -578,6 +589,214 @@ function TabPlanes({ planes, isPending, startTransition, showMsg }: {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab Usuarios ─────────────────────────────────────────────────────
+
+const ROLES = [
+  { value: "admin", label: "Administrador", desc: "Acceso total al sistema" },
+  { value: "contador", label: "Contador", desc: "Contabilidad y reportes" },
+  { value: "comercial", label: "Comercial", desc: "Gestión de clientes y facturación" },
+  { value: "consulta", label: "Consulta", desc: "Solo lectura" },
+];
+
+function TabUsuarios({ usuarios, isPending, startTransition, showMsg }: {
+  usuarios: Usuario[];
+  isPending: boolean;
+  startTransition: React.TransitionStartFunction;
+  showMsg: (t: "ok" | "error", m: string) => void;
+}) {
+  const [creando, setCreando] = useState(false);
+  const [editando, setEditando] = useState<Usuario | null>(null);
+  const [form, setForm] = useState({ email: "", password: "", nombre: "", rol: "consulta" });
+
+  const handleCrear = () => {
+    if (!form.email || !form.password || !form.nombre) {
+      showMsg("error", "Email, contraseña y nombre son requeridos");
+      return;
+    }
+    if (form.password.length < 6) {
+      showMsg("error", "La contraseña debe tener al menos 6 caracteres");
+      return;
+    }
+    startTransition(async () => {
+      const res = await crearUsuario(form);
+      if (res.error) showMsg("error", res.error);
+      else {
+        showMsg("ok", "Usuario creado exitosamente");
+        setCreando(false);
+        setForm({ email: "", password: "", nombre: "", rol: "consulta" });
+      }
+    });
+  };
+
+  const handleEditar = () => {
+    if (!editando) return;
+    startTransition(async () => {
+      const res = await actualizarUsuario(editando.id, { nombre: editando.nombre, rol: editando.rol });
+      if (res.error) showMsg("error", res.error);
+      else { showMsg("ok", "Usuario actualizado"); setEditando(null); }
+    });
+  };
+
+  const handleToggle = (u: Usuario) => {
+    startTransition(async () => {
+      const res = await toggleUsuario(u.id, u.activo);
+      if (res.error) showMsg("error", res.error);
+      else showMsg("ok", u.activo ? "Usuario desactivado" : "Usuario activado");
+    });
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold text-gray-900">Usuarios del Sistema</h3>
+          <p className="text-xs text-gray-500 mt-0.5">{usuarios.length} usuarios registrados</p>
+        </div>
+        <button onClick={() => { setCreando(true); setEditando(null); }}
+          className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700 transition">
+          + Nuevo usuario
+        </button>
+      </div>
+
+      {/* Crear usuario */}
+      {creando && (
+        <div className="px-4 sm:px-6 py-5 bg-indigo-50/50 border-b border-indigo-100">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Nuevo usuario</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Nombre</label>
+              <input value={form.nombre} onChange={(e) => setForm((p) => ({ ...p, nombre: e.target.value }))}
+                placeholder="Nombre completo" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Email</label>
+              <input type="email" value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+                placeholder="usuario@empresa.cl" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Contraseña</label>
+              <input type="password" value={form.password} onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))}
+                placeholder="Mínimo 6 caracteres" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Rol</label>
+              <select value={form.rol} onChange={(e) => setForm((p) => ({ ...p, rol: e.target.value }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
+                {ROLES.map((r) => (<option key={r.value} value={r.value}>{r.label}</option>))}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={handleCrear} disabled={isPending}
+              className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+              {isPending ? "Creando..." : "Crear usuario"}
+            </button>
+            <button onClick={() => { setCreando(false); setForm({ email: "", password: "", nombre: "", rol: "consulta" }); }}
+              className="text-gray-500 hover:text-gray-700 px-4 py-2 text-sm transition">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Editar usuario */}
+      {editando && (
+        <div className="px-4 sm:px-6 py-5 bg-amber-50/50 border-b border-amber-100">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Editando: {editando.email}</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Nombre</label>
+              <input value={editando.nombre} onChange={(e) => setEditando((p) => p ? { ...p, nombre: e.target.value } : null)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-200 focus:border-amber-400" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Rol</label>
+              <select value={editando.rol} onChange={(e) => setEditando((p) => p ? { ...p, rol: e.target.value } : null)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-amber-200 focus:border-amber-400">
+                {ROLES.map((r) => (<option key={r.value} value={r.value}>{r.label}</option>))}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={handleEditar} disabled={isPending}
+              className="bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition">
+              {isPending ? "Guardando..." : "Guardar cambios"}
+            </button>
+            <button onClick={() => setEditando(null)} className="text-gray-500 hover:text-gray-700 px-4 py-2 text-sm transition">Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Lista de usuarios */}
+      <div className="divide-y divide-gray-50">
+        {usuarios.map((u) => {
+          const rolInfo = ROLES.find((r) => r.value === u.rol) || ROLES[3];
+          const initials = (u.nombre || u.email)[0].toUpperCase();
+          return (
+            <div key={u.id} className={`px-4 sm:px-6 py-4 flex items-center gap-4 hover:bg-gray-50/50 transition ${!u.activo ? "opacity-50" : ""}`}>
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                u.rol === "admin" ? "bg-indigo-100 text-indigo-700" :
+                u.rol === "contador" ? "bg-emerald-100 text-emerald-700" :
+                u.rol === "comercial" ? "bg-amber-100 text-amber-700" :
+                "bg-gray-100 text-gray-600"
+              }`}>
+                <span className="text-sm font-bold">{initials}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-gray-900 text-sm">{u.nombre || "Sin nombre"}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                    u.rol === "admin" ? "bg-indigo-100 text-indigo-700" :
+                    u.rol === "contador" ? "bg-emerald-100 text-emerald-700" :
+                    u.rol === "comercial" ? "bg-amber-100 text-amber-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>
+                    {rolInfo.label}
+                  </span>
+                  {!u.activo && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-medium">Inactivo</span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5">{u.email}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  Creado: {new Date(u.created_at).toLocaleDateString("es-CL")}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button onClick={() => { setEditando(u); setCreando(false); }}
+                  className="px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 rounded-lg font-medium transition">
+                  Editar
+                </button>
+                <button onClick={() => handleToggle(u)}
+                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition ${
+                    u.activo ? "text-red-600 hover:bg-red-50" : "text-emerald-600 hover:bg-emerald-50"
+                  }`}>
+                  {u.activo ? "Desactivar" : "Activar"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {usuarios.length === 0 && (
+        <div className="text-center py-12 text-gray-400 text-sm">No hay usuarios registrados</div>
+      )}
+
+      {/* Leyenda de roles */}
+      <div className="px-4 sm:px-6 py-4 bg-gray-50 border-t border-gray-100">
+        <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Roles disponibles</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {ROLES.map((r) => (
+            <div key={r.value} className="text-xs">
+              <span className="font-medium text-gray-700">{r.label}</span>
+              <span className="text-gray-400 ml-1">— {r.desc}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
