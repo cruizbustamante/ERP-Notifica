@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import { getLibroVentas, getLibroCompras, getLibroHonorarios, type DocTributario, type DocHonorarioTrib } from "./actions";
-import * as XLSX from "xlsx";
+import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
 
 type Periodo = { anio: number; estado: string };
 type Tab = "ventas" | "compras" | "honorarios";
@@ -49,39 +49,68 @@ export default function LibrosTributariosClient({
     { bruto: 0, retencion: 0, liquido: 0 }
   );
 
-  const descargarExcel = () => {
+  const descargarExcel = async () => {
+    const periodo = `${MESES[mes]} ${anio}`;
+    const mesStr = String(mes).padStart(2, "0");
+    const right: { horizontal: "right"; vertical: "middle" } = { horizontal: "right", vertical: "middle" };
+
     if (tab === "honorarios") {
-      const rows = docsHon.map((d) => ({
-        Folio: d.folio,
-        RUT: d.rut,
-        "Razón Social": d.razon_social,
-        Fecha: d.fecha_emision || "",
-        Bruto: d.monto_bruto,
-        Retención: d.retencion,
-        Líquido: d.monto_liquido,
-        Centralizado: d.centralizado ? "Sí" : "No",
-      }));
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Honorarios");
-      XLSX.writeFile(wb, `Libro_Honorarios_${anio}_${String(mes).padStart(2, "0")}.xlsx`);
+      const wb = crearLibroCorporativo({
+        titulo: "LIBRO DE HONORARIOS",
+        periodo,
+        hoja: "Honorarios",
+        columnas: [
+          { key: "folio", header: "Folio", width: 10 },
+          { key: "rut", header: "RUT", width: 14 },
+          { key: "razon_social", header: "Razón Social", width: 30 },
+          { key: "fecha", header: "Fecha", width: 12 },
+          { key: "bruto", header: "Bruto", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "retencion", header: "Retención", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "liquido", header: "Líquido", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "centralizado", header: "Cent.", width: 8 },
+        ],
+        datos: docsHon.map((d) => ({
+          folio: d.folio, rut: d.rut, razon_social: d.razon_social,
+          fecha: d.fecha_emision || "", bruto: d.monto_bruto,
+          retencion: d.retencion, liquido: d.monto_liquido,
+          centralizado: d.centralizado ? "Sí" : "No",
+        })),
+        totales: {
+          folio: `TOTALES (${docsHon.length})`, bruto: totalesHon.bruto,
+          retencion: totalesHon.retencion, liquido: totalesHon.liquido,
+        },
+      });
+      await descargarWorkbook(wb, `Libro_Honorarios_${anio}_${mesStr}.xlsx`);
     } else {
-      const rows = docs.map((d) => ({
-        Tipo: d.tipo_dte_nombre,
-        Folio: d.folio,
-        Fecha: d.fecha_emision || "",
-        RUT: d.rut,
-        "Razón Social": d.razon_social,
-        Exento: d.monto_exento,
-        Neto: d.monto_neto,
-        IVA: d.monto_iva,
-        Total: d.monto_total,
-        Centralizado: d.centralizado ? "Sí" : "No",
-      }));
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, tab === "ventas" ? "Ventas" : "Compras");
-      XLSX.writeFile(wb, `Libro_${tab === "ventas" ? "Ventas" : "Compras"}_${anio}_${String(mes).padStart(2, "0")}.xlsx`);
+      const nombre = tab === "ventas" ? "VENTAS" : "COMPRAS";
+      const wb = crearLibroCorporativo({
+        titulo: `LIBRO DE ${nombre}`,
+        periodo,
+        hoja: tab === "ventas" ? "Ventas" : "Compras",
+        columnas: [
+          { key: "tipo", header: "Tipo", width: 12 },
+          { key: "folio", header: "Folio", width: 10 },
+          { key: "fecha", header: "Fecha", width: 12 },
+          { key: "rut", header: "RUT", width: 14 },
+          { key: "razon_social", header: "Razón Social", width: 30 },
+          { key: "exento", header: "Exento", width: 14, numFmt: "#,##0", alignment: right },
+          { key: "neto", header: "Neto", width: 14, numFmt: "#,##0", alignment: right },
+          { key: "iva", header: "IVA", width: 14, numFmt: "#,##0", alignment: right },
+          { key: "total", header: "Total", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "centralizado", header: "Cent.", width: 8 },
+        ],
+        datos: docs.map((d) => ({
+          tipo: d.tipo_dte_nombre, folio: d.folio, fecha: d.fecha_emision || "",
+          rut: d.rut, razon_social: d.razon_social, exento: d.monto_exento,
+          neto: d.monto_neto, iva: d.monto_iva, total: d.monto_total,
+          centralizado: d.centralizado ? "Sí" : "No",
+        })),
+        totales: {
+          tipo: `TOTALES (${docs.length})`, exento: totales.exento,
+          neto: totales.neto, iva: totales.iva, total: totales.total,
+        },
+      });
+      await descargarWorkbook(wb, `Libro_${tab === "ventas" ? "Ventas" : "Compras"}_${anio}_${mesStr}.xlsx`);
     }
   };
 

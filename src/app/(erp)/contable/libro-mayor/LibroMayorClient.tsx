@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import { getLibroMayor, getLibroMayorCompleto, type LibroMayorResult } from "./actions";
-import * as XLSX from "xlsx";
+import { crearLibroMayorCorporativo, descargarWorkbook } from "@/lib/excel";
 
 type Periodo = { anio: number; estado: string };
 type Cuenta = { codigo: string; nombre: string; tipo: string };
@@ -40,22 +40,28 @@ export default function LibroMayorClient({
       const { data, error: err } = await getLibroMayorCompleto(anio, mesDesde, mesHasta);
       if (err || !data || data.length === 0) { setError(err || "Sin datos para exportar"); return; }
 
-      const rows: Record<string, string | number>[] = [];
-      for (const cuenta of data) {
-        if (cuenta.saldo_anterior !== 0) {
-          rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: "", Comprobante: "", Auxiliar: "", Documento: "", Debe: "", Haber: "", Saldo: cuenta.saldo_anterior, Glosa: "SALDO ANTERIOR" });
-        }
-        for (const m of cuenta.movimientos) {
-          rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: m.fecha, Comprobante: m.comprobante, Auxiliar: m.auxiliar_rut, Documento: m.tipo_doc ? `${m.tipo_doc} ${m.num_doc}` : "", Debe: m.debe || "", Haber: m.haber || "", Saldo: m.saldo, Glosa: m.glosa });
-        }
-        rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: "", Comprobante: "", Auxiliar: "", Documento: "TOTALES", Debe: cuenta.total_debe, Haber: cuenta.total_haber, Saldo: cuenta.saldo_final, Glosa: "" });
-        rows.push({} as Record<string, string | number>);
-      }
+      const periodo = mesDesde === mesHasta
+        ? `${MESES[mesDesde]} ${anio}`
+        : `${MESES[mesDesde]} a ${MESES[mesHasta]} ${anio}`;
 
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Libro Mayor");
-      XLSX.writeFile(wb, `Libro_Mayor_${anio}_${String(mesDesde).padStart(2,"0")}-${String(mesHasta).padStart(2,"0")}.xlsx`);
+      const wb = crearLibroMayorCorporativo({
+        periodo,
+        cuentas: data.map((c) => ({
+          codigo: c.cuenta_codigo,
+          nombre: c.cuenta_nombre,
+          saldoAnterior: c.saldo_anterior,
+          movimientos: c.movimientos.map((m) => ({
+            fecha: m.fecha, comprobante: m.comprobante, auxiliar: m.auxiliar_rut,
+            documento: m.tipo_doc ? `${m.tipo_doc} ${m.num_doc}` : "",
+            debe: m.debe, haber: m.haber, saldo: m.saldo, glosa: m.glosa,
+          })),
+          totalDebe: c.total_debe,
+          totalHaber: c.total_haber,
+          saldoFinal: c.saldo_final,
+        })),
+      });
+
+      await descargarWorkbook(wb, `Libro_Mayor_${anio}_${String(mesDesde).padStart(2,"0")}-${String(mesHasta).padStart(2,"0")}.xlsx`);
     });
   };
 
