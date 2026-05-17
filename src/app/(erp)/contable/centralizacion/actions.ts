@@ -524,6 +524,33 @@ export async function anularCentralizacion(centralizacionId: number) {
   return { error: null };
 }
 
+// ─── Eliminar carga pendiente ───────────────────────────────────────────
+
+export async function eliminarCargaPendiente(
+  tipo: TipoLibro,
+  anio: number,
+  mes: number
+): Promise<{ eliminados: number; error: string | null }> {
+  await requireRol("contador");
+  const supabase = await createClient();
+  const tablaMap: Record<string, string> = { ventas: "ventas_sii", compras: "compras_sii", honorarios: "honorarios_sii", transbank: "transbank_vouchers" };
+  const tabla = tablaMap[tipo];
+  if (!tabla) return { eliminados: 0, error: "Tipo no válido" };
+
+  const { data, error } = await supabase
+    .from(tabla)
+    .delete()
+    .eq("anio", anio)
+    .eq("mes", mes)
+    .eq("centralizado", false)
+    .select("id");
+
+  if (error) return { eliminados: 0, error: error.message };
+
+  revalidatePath("/contable/centralizacion");
+  return { eliminados: data?.length || 0, error: null };
+}
+
 // ─── Cargar Excel SII ───────────────────────────────────────────────────
 
 export async function cargarExcelVentas(registros: Array<{

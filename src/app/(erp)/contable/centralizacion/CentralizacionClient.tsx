@@ -10,6 +10,7 @@ import {
   previsualizarCentralizacion,
   centralizarDocumentos,
   anularCentralizacion,
+  eliminarCargaPendiente,
   cargarExcelVentas,
   cargarExcelCompras,
   cargarExcelHonorarios,
@@ -251,6 +252,20 @@ export default function CentralizacionClient({
       } catch (err) {
         setMensaje({ tipo: "error", texto: `Error cargando: ${err instanceof Error ? err.message : "desconocido"}` });
       }
+    });
+  };
+
+  const handleEliminarCarga = () => {
+    if (!libroActivo || !mesActivo) return;
+    const pendientes = libroActivo === "transbank" ? docsTransbank.length : libroActivo === "honorarios" ? docsHon.length : docs.length;
+    if (pendientes === 0) { setMensaje({ tipo: "error", texto: "No hay registros pendientes para eliminar" }); return; }
+    if (!confirm(`¿Eliminar ${pendientes} registros pendientes de ${MESES[mesActivo]} ${anio}? Solo se eliminan los NO centralizados.`)) return;
+    startTransition(async () => {
+      const { eliminados, error } = await eliminarCargaPendiente(libroActivo, anio, mesActivo);
+      if (error) { setMensaje({ tipo: "error", texto: error }); return; }
+      setMensaje({ tipo: "ok", texto: `${eliminados} registros eliminados` });
+      cargarDocumentos(mesActivo);
+      cargarResumen();
     });
   };
 
@@ -802,9 +817,14 @@ export default function CentralizacionClient({
                       {formatMonto(docs.filter((d) => selectedIds.has(d.id)).reduce((sum, d) => sum + d.monto_total * (d.esNC ? -1 : 1), 0))}
                     </span>
                   </div>
-                  <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                    {isPending ? "Procesando..." : "Previsualizar asiento"}
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={handleEliminarCarga} disabled={isPending} className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50">
+                      Eliminar pendientes
+                    </button>
+                    <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                      {isPending ? "Procesando..." : "Previsualizar asiento"}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -929,9 +949,14 @@ export default function CentralizacionClient({
                       {formatMonto(docsHon.filter((d) => selectedIds.has(d.id)).reduce((s, d) => s + d.retencion, 0))}
                     </span>
                   </div>
-                  <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                    {isPending ? "Procesando..." : "Previsualizar asiento"}
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={handleEliminarCarga} disabled={isPending} className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50">
+                      Eliminar pendientes
+                    </button>
+                    <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                      {isPending ? "Procesando..." : "Previsualizar asiento"}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1048,9 +1073,14 @@ export default function CentralizacionClient({
                       {formatMonto(docsTransbank.filter((d) => selectedIds.has(d.id)).reduce((s, d) => s + d.monto_neto, 0))}
                     </span>
                   </div>
-                  <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-teal-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50">
-                    {isPending ? "Procesando..." : "Previsualizar asiento"}
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={handleEliminarCarga} disabled={isPending} className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50">
+                      Eliminar pendientes
+                    </button>
+                    <button onClick={generarPreview} disabled={isPending || selectedIds.size === 0} className="bg-teal-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50">
+                      {isPending ? "Procesando..." : "Previsualizar asiento"}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1342,8 +1372,8 @@ function parseSIIHonorarios(rows: Record<string, string>[]) {
           folio,
           fecha_emision: parseDateHon(fechaRaw),
           monto_bruto: bruto,
-          retencion: retencion || Math.round(bruto * 0.1375),
-          monto_liquido: liquido || (bruto - (retencion || Math.round(bruto * 0.1375))),
+          retencion: retencion,
+          monto_liquido: liquido || (bruto - retencion),
         };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null && !!r.fecha_emision);
@@ -1362,8 +1392,8 @@ function parseSIIHonorarios(rows: Record<string, string>[]) {
     if (estado && estado !== "VIGENTE") return null;
     return {
       rut_emisor: rut, razon_social: razon, folio, fecha_emision: fecha,
-      monto_bruto: bruto, retencion: retencion || Math.round(bruto * 0.1375),
-      monto_liquido: liquido || (bruto - (retencion || Math.round(bruto * 0.1375))),
+      monto_bruto: bruto, retencion: retencion,
+      monto_liquido: liquido || (bruto - retencion),
     };
   }).filter((r): r is NonNullable<typeof r> => r !== null && !!r.folio && !!r.fecha_emision);
 }
