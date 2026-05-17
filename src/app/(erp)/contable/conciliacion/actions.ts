@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 
 async function getConfig() {
   const supabase = await createClient();
-  const { data } = await supabase.from("config_contable").select("clave, valor");
+  const { data } = await supabase.from("config").select("clave, valor");
   const map: Record<string, string> = {};
   for (const r of data || []) map[r.clave] = r.valor;
   return map;
@@ -278,8 +278,12 @@ export async function cargarCartolaSantander(movimientos: Array<{
   // Generate MD5 huellas and prepare records
   const { createHash } = await import("crypto");
 
+  const huellaCount = new Map<string, number>();
   const records = movimientos.map((m) => {
-    const huellaStr = `${m.monto}|${m.descripcion}|${m.fecha}|${m.num_doc}|${m.cargo_abono}|${m.saldo}`;
+    let huellaStr = `${m.fecha}|${Math.round(m.monto)}|${Math.round(m.saldo)}|${m.descripcion}|${m.cargo_abono}`;
+    const count = (huellaCount.get(huellaStr) || 0) + 1;
+    huellaCount.set(huellaStr, count);
+    if (count > 1) huellaStr += `|${count}`;
     const huella = createHash("md5").update(huellaStr).digest("hex");
     const [year, month] = m.fecha.split("-").map(Number);
     return {
@@ -316,6 +320,7 @@ export async function cargarCartolaSantander(movimientos: Array<{
   }
 
   revalidatePath("/contable/conciliacion");
+  revalidatePath("/inicio");
   return { nuevos, duplicados, errores };
 }
 

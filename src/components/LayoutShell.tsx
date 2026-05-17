@@ -62,6 +62,19 @@ const NAV_SECTIONS = [
       { label: "Cartera", href: "/gestion/cartera" },
     ],
   },
+  {
+    label: "Configuración",
+    icon: "⚙️",
+    href: "/configuracion",
+    segment: "configuracion",
+    children: [
+      { label: "Empresa", href: "/configuracion?tab=empresa" },
+      { label: "Centralización", href: "/configuracion?tab=centralizacion" },
+      { label: "Categorías Flujo", href: "/configuracion?tab=categorias" },
+      { label: "Tipos Documento", href: "/configuracion?tab=documentos" },
+      { label: "Planes", href: "/configuracion?tab=planes" },
+    ],
+  },
 ];
 
 export default function LayoutShell({ user, children }: Props) {

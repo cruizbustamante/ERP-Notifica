@@ -299,6 +299,115 @@ export async function anularComprobante(id: number) {
   return { error: null };
 }
 
+export async function getComprobante(id: number) {
+  const supabase = await createClient();
+
+  const { data: comp, error } = await supabase
+    .from("comprobantes")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error || !comp) return { data: null, error: error?.message || "No encontrado" };
+
+  const { data: movs } = await supabase
+    .from("mov_contables")
+    .select("*")
+    .eq("comprobante_id", id)
+    .order("linea");
+
+  return { data: { ...comp, lineas: movs || [] }, error: null };
+}
+
+export async function actualizarComprobante(
+  id: number,
+  data: { fecha: string; glosa: string; lineas: LineaData[] }
+) {
+  const supabase = await createClient();
+
+  const { data: comp } = await supabase
+    .from("comprobantes")
+    .select("id, anio, estado")
+    .eq("id", id)
+    .single();
+
+  if (!comp) return { error: "Comprobante no encontrado" };
+  if (comp.estado === "ANULADO") return { error: "No se puede modificar un comprobante anulado" };
+
+  // Validar período abierto
+  const { data: periodo } = await supabase
+    .from("periodos")
+    .select("estado")
+    .eq("anio", comp.anio)
+    .single();
+
+  if (periodo && periodo.estado !== "ABIERTO") {
+    return { error: `Período ${comp.anio} está cerrado` };
+  }
+
+  if (data.lineas.length < 2) return { error: "Mínimo 2 líneas" };
+
+  let totalDebe = 0, totalHaber = 0;
+  for (const l of data.lineas) {
+    if (l.debe < 0 || l.haber < 0) return { error: "Montos no pueden ser negativos" };
+    if (l.debe === 0 && l.haber === 0) return { error: "Cada línea debe tener monto" };
+    totalDebe += l.debe;
+    totalHaber += l.haber;
+  }
+  if (Math.abs(totalDebe - totalHaber) > 0.01) {
+    return { error: `Descuadrado: Debe $${Math.round(totalDebe).toLocaleString()} ≠ Haber $${Math.round(totalHaber).toLocaleString()}` };
+  }
+
+  // Validar cuentas
+  const codigos = [...new Set(data.lineas.map((l) => l.cuenta_codigo))];
+  const { data: cuentas } = await supabase
+    .from("plan_cuentas")
+    .select("codigo, nombre, tipo, nivel, usa_auxiliar, usa_documento, estado")
+    .in("codigo", codigos);
+
+  const cuentaMap = new Map((cuentas || []).map((c) => [c.codigo, c]));
+  for (const l of data.lineas) {
+    const cuenta = cuentaMap.get(l.cuenta_codigo);
+    if (!cuenta) return { error: `Cuenta ${l.cuenta_codigo} no existe` };
+    if (cuenta.estado !== "S") return { error: `Cuenta ${l.cuenta_codigo} inactiva` };
+    if (cuenta.nivel !== 4) return { error: `Cuenta ${l.cuenta_codigo} no es de movimiento` };
+  }
+
+  // Actualizar fecha/mes
+  const fecha = new Date(data.fecha + "T12:00:00");
+  const mes = fecha.getMonth() + 1;
+
+  const { error: updErr } = await supabase
+    .from("comprobantes")
+    .update({ fecha: data.fecha, glosa: data.glosa, mes })
+    .eq("id", id);
+
+  if (updErr) return { error: updErr.message };
+
+  // Reemplazar movimientos: borrar y reinsertar
+  await supabase.from("mov_contables").delete().eq("comprobante_id", id);
+
+  const lineas = data.lineas.map((l, i) => ({
+    comprobante_id: id,
+    linea: i + 1,
+    cuenta_codigo: l.cuenta_codigo,
+    debe: l.debe,
+    haber: l.haber,
+    glosa: l.glosa || data.glosa,
+    auxiliar_rut: l.auxiliar_rut,
+    tipo_doc: l.tipo_doc,
+    num_doc: l.num_doc,
+    fecha_doc: l.fecha_doc || null,
+    referencia: l.referencia,
+  }));
+
+  const { error: lineErr } = await supabase.from("mov_contables").insert(lineas);
+  if (lineErr) return { error: lineErr.message };
+
+  revalidatePath("/contable/comprobantes");
+  return { error: null };
+}
+
 export async function getDocumentosAbiertos(
   cuenta_codigo: string,
   auxiliar_rut: string

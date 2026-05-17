@@ -254,9 +254,9 @@ export default function ComprobantesClient({
               <div key={c.id}>
                 {/* Desktop */}
                 <div className="hidden lg:grid lg:grid-cols-[55px_70px_90px_1fr_100px_100px_70px_70px] gap-2 px-4 py-2.5 items-center text-sm hover:bg-gray-50">
-                  <span className="font-mono font-medium text-gray-900">
+                  <Link href={`/contable/comprobantes/${c.id}`} className="font-mono font-medium text-blue-600 hover:text-blue-800 hover:underline">
                     {c.numero}
-                  </span>
+                  </Link>
                   <span>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${ti.color}`}
@@ -305,9 +305,9 @@ export default function ComprobantesClient({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-mono font-bold text-sm text-gray-900">
+                        <Link href={`/contable/comprobantes/${c.id}`} className="font-mono font-bold text-sm text-blue-600 hover:text-blue-800">
                           {c.tipo}-{c.numero}
-                        </span>
+                        </Link>
                         <span
                           className={`text-[8px] px-1 py-0.5 rounded font-medium ${ti.color}`}
                         >

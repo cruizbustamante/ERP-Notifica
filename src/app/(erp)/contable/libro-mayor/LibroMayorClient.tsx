@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
-import { getLibroMayor, type LibroMayorResult } from "./actions";
+import { getLibroMayor, getLibroMayorCompleto, type LibroMayorResult } from "./actions";
+import * as XLSX from "xlsx";
 
 type Periodo = { anio: number; estado: string };
 type Cuenta = { codigo: string; nombre: string; tipo: string };
@@ -19,6 +20,7 @@ export default function LibroMayorClient({
   const [mesHasta, setMesHasta] = useState(12);
   const [cuentaCodigo, setCuentaCodigo] = useState("");
   const [busqCuenta, setBusqCuenta] = useState("");
+  const [showDropdown, setShowDropdown] = useState(false);
   const [result, setResult] = useState<LibroMayorResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -32,9 +34,33 @@ export default function LibroMayorClient({
     });
   };
 
+  const descargarCompleto = () => {
+    startTransition(async () => {
+      const { data, error: err } = await getLibroMayorCompleto(anio, mesDesde, mesHasta);
+      if (err || !data || data.length === 0) { setError(err || "Sin datos para exportar"); return; }
+
+      const rows: Record<string, string | number>[] = [];
+      for (const cuenta of data) {
+        if (cuenta.saldo_anterior !== 0) {
+          rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: "", Comprobante: "", Auxiliar: "", Documento: "", Debe: "", Haber: "", Saldo: cuenta.saldo_anterior, Glosa: "SALDO ANTERIOR" });
+        }
+        for (const m of cuenta.movimientos) {
+          rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: m.fecha, Comprobante: m.comprobante, Auxiliar: m.auxiliar_rut, Documento: m.tipo_doc ? `${m.tipo_doc} ${m.num_doc}` : "", Debe: m.debe || "", Haber: m.haber || "", Saldo: m.saldo, Glosa: m.glosa });
+        }
+        rows.push({ Cuenta: cuenta.cuenta_codigo, Nombre: cuenta.cuenta_nombre, Fecha: "", Comprobante: "", Auxiliar: "", Documento: "TOTALES", Debe: cuenta.total_debe, Haber: cuenta.total_haber, Saldo: cuenta.saldo_final, Glosa: "" });
+        rows.push({} as Record<string, string | number>);
+      }
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Libro Mayor");
+      XLSX.writeFile(wb, `Libro_Mayor_${anio}_${String(mesDesde).padStart(2,"0")}-${String(mesHasta).padStart(2,"0")}.xlsx`);
+    });
+  };
+
   const filtradas = busqCuenta
-    ? cuentas.filter((c) => c.codigo.includes(busqCuenta) || c.nombre.toLowerCase().includes(busqCuenta.toLowerCase())).slice(0, 15)
-    : cuentas.slice(0, 15);
+    ? cuentas.filter((c) => c.codigo.includes(busqCuenta) || c.nombre.toLowerCase().includes(busqCuenta.toLowerCase()))
+    : cuentas;
 
   return (
     <div className="space-y-4">
@@ -68,30 +94,43 @@ export default function LibroMayorClient({
           <div className="flex-1 min-w-[250px]">
             <label className="block text-xs text-gray-500 mb-1">Cuenta</label>
             <div className="relative">
-              <input
-                type="text"
-                value={busqCuenta}
-                onChange={(e) => { setBusqCuenta(e.target.value); if (!e.target.value) setCuentaCodigo(""); }}
-                placeholder="Buscar cuenta..."
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-              {busqCuenta && !cuentaCodigo && (
-                <div className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg mt-1 shadow-lg max-h-48 overflow-y-auto">
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  value={busqCuenta}
+                  onChange={(e) => { setBusqCuenta(e.target.value); setCuentaCodigo(""); setShowDropdown(true); }}
+                  onFocus={() => setShowDropdown(true)}
+                  placeholder="Buscar por código o nombre..."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+                {cuentaCodigo && (
+                  <button onClick={() => { setCuentaCodigo(""); setBusqCuenta(""); setShowDropdown(false); }} className="px-2 text-gray-400 hover:text-gray-600 flex-shrink-0" title="Limpiar">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                )}
+              </div>
+              {showDropdown && !cuentaCodigo && (
+                <div className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg mt-1 shadow-lg max-h-64 overflow-y-auto">
+                  <div className="sticky top-0 bg-gray-50 px-3 py-1.5 text-xs text-gray-500 border-b">{filtradas.length} cuentas</div>
                   {filtradas.map((c) => (
                     <button
                       key={c.codigo}
-                      onClick={() => { setCuentaCodigo(c.codigo); setBusqCuenta(`${c.codigo} — ${c.nombre}`); }}
-                      className="block w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50"
+                      onClick={() => { setCuentaCodigo(c.codigo); setBusqCuenta(`${c.codigo} — ${c.nombre}`); setShowDropdown(false); }}
+                      className="block w-full text-left px-3 py-1.5 text-sm hover:bg-blue-50 border-b border-gray-50 last:border-0"
                     >
-                      <span className="font-mono">{c.codigo}</span> — {c.nombre}
+                      <span className="font-mono text-blue-600">{c.codigo}</span> — {c.nombre}
                     </button>
                   ))}
+                  {filtradas.length === 0 && <div className="px-3 py-3 text-sm text-gray-400 text-center">Sin resultados</div>}
                 </div>
               )}
             </div>
           </div>
           <button onClick={consultar} disabled={isPending} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
             {isPending ? "Cargando..." : "Consultar"}
+          </button>
+          <button onClick={descargarCompleto} disabled={isPending} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50" title="Descarga Excel con todas las cuentas con movimiento">
+            {isPending ? "..." : "Descargar todo"}
           </button>
         </div>
       </div>
@@ -124,22 +163,23 @@ export default function LibroMayorClient({
                 <tr className="text-left text-gray-500 border-b bg-gray-50">
                   <th className="px-4 py-2 font-medium">Fecha</th>
                   <th className="px-4 py-2 font-medium">Comp.</th>
-                  <th className="px-4 py-2 font-medium">Glosa</th>
                   <th className="px-4 py-2 font-medium">Auxiliar</th>
                   <th className="px-4 py-2 font-medium">Doc</th>
                   <th className="px-4 py-2 font-medium text-right">Debe</th>
                   <th className="px-4 py-2 font-medium text-right">Haber</th>
                   <th className="px-4 py-2 font-medium text-right">Saldo</th>
+                  <th className="px-4 py-2 font-medium">Glosa</th>
                 </tr>
               </thead>
               <tbody>
                 {/* Saldo anterior */}
                 {result.saldo_anterior !== 0 && (
                   <tr className="border-b bg-blue-50">
-                    <td colSpan={5} className="px-4 py-2 font-medium text-blue-700">Saldo anterior</td>
+                    <td colSpan={4} className="px-4 py-2 font-medium text-blue-700">Saldo anterior</td>
                     <td className="px-4 py-2 text-right font-mono"></td>
                     <td className="px-4 py-2 text-right font-mono"></td>
                     <td className="px-4 py-2 text-right font-mono font-medium text-blue-700">{formatMonto(result.saldo_anterior)}</td>
+                    <td className="px-4 py-2"></td>
                   </tr>
                 )}
 
@@ -147,21 +187,22 @@ export default function LibroMayorClient({
                   <tr key={i} className="border-b hover:bg-gray-50">
                     <td className="px-4 py-1.5 whitespace-nowrap">{m.fecha}</td>
                     <td className="px-4 py-1.5 font-mono text-xs">{m.comprobante}</td>
-                    <td className="px-4 py-1.5 truncate max-w-[250px]">{m.glosa}</td>
                     <td className="px-4 py-1.5 font-mono text-xs">{m.auxiliar_rut}</td>
                     <td className="px-4 py-1.5 text-xs">{m.tipo_doc && `${m.tipo_doc} ${m.num_doc}`}</td>
                     <td className="px-4 py-1.5 text-right font-mono">{m.debe > 0 ? formatMonto(m.debe) : ""}</td>
                     <td className="px-4 py-1.5 text-right font-mono">{m.haber > 0 ? formatMonto(m.haber) : ""}</td>
                     <td className="px-4 py-1.5 text-right font-mono font-medium">{formatMonto(m.saldo)}</td>
+                    <td className="px-4 py-1.5 truncate max-w-[250px] text-gray-600">{m.glosa}</td>
                   </tr>
                 ))}
 
                 {/* Totales */}
                 <tr className="border-t-2 border-gray-300 bg-gray-50 font-medium">
-                  <td colSpan={5} className="px-4 py-2">Totales</td>
+                  <td colSpan={4} className="px-4 py-2">Totales</td>
                   <td className="px-4 py-2 text-right font-mono">{formatMonto(result.total_debe)}</td>
                   <td className="px-4 py-2 text-right font-mono">{formatMonto(result.total_haber)}</td>
                   <td className="px-4 py-2 text-right font-mono font-bold">{formatMonto(result.saldo_final)}</td>
+                  <td className="px-4 py-2"></td>
                 </tr>
               </tbody>
             </table>

@@ -81,3 +81,43 @@ export async function getLibroCompras(anio: number, mes: number) {
     error: null,
   };
 }
+
+export type DocHonorarioTrib = {
+  id: number;
+  folio: string;
+  rut: string;
+  razon_social: string;
+  fecha_emision: string | null;
+  monto_bruto: number;
+  retencion: number;
+  monto_liquido: number;
+  centralizado: boolean;
+};
+
+export async function getLibroHonorarios(anio: number, mes: number) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("honorarios_sii")
+    .select("id, folio, rut_emisor, razon_social, fecha_emision, monto_bruto, retencion, monto_liquido, centralizado")
+    .eq("anio", anio)
+    .eq("mes", mes)
+    .order("fecha_emision")
+    .order("folio");
+
+  if (error) return { data: [], error: error.message };
+
+  return {
+    data: (data || []).map((r) => ({
+      id: r.id,
+      folio: r.folio || "",
+      rut: r.rut_emisor || "",
+      razon_social: r.razon_social || "",
+      fecha_emision: r.fecha_emision,
+      monto_bruto: Number(r.monto_bruto) || 0,
+      retencion: Number(r.retencion) || 0,
+      monto_liquido: Number(r.monto_liquido) || 0,
+      centralizado: r.centralizado || false,
+    })) as DocHonorarioTrib[],
+    error: null,
+  };
+}

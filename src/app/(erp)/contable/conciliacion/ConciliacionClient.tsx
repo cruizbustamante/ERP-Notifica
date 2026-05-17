@@ -18,6 +18,7 @@ type Cuenta = { codigo: string; nombre: string; tipo: string; usa_auxiliar: stri
 type Auxiliar = { rut: string; razon_social: string };
 type MesData = { abonos: number; cargos: number; pend: number; cont: number };
 type DocPend = { tipo_doc: string; num_doc: string; saldo: number };
+type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; orden: number };
 type Dashboard = {
   saldo: number;
   totalMovs: number;
@@ -29,11 +30,12 @@ type Dashboard = {
 };
 
 export default function ConciliacionClient({
-  periodos, cuentas, auxiliares, currentYear, dashboard,
+  periodos, cuentas, auxiliares, categoriasFlujo, currentYear, dashboard,
 }: {
   periodos: Periodo[];
   cuentas: Cuenta[];
   auxiliares: Auxiliar[];
+  categoriasFlujo: CategoriaFlujo[];
   currentYear: number;
   dashboard: Dashboard;
 }) {
@@ -43,7 +45,6 @@ export default function ConciliacionClient({
   const [mesActivo, setMesActivo] = useState<number | null>(null);
   const [vista, setVista] = useState<"dashboard" | "movimientos" | "contabilizar" | "upload">("dashboard");
   const [movActivo, setMovActivo] = useState<MovCartola | null>(null);
-  const [soloNoCont, setSoloNoCont] = useState(true);
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [isPending, startTransition] = useTransition();
   const [saldoActual] = useState(dashboard.saldo);
@@ -60,9 +61,14 @@ export default function ConciliacionClient({
   const [formTipoDoc, setFormTipoDoc] = useState("");
   const [formNumDoc, setFormNumDoc] = useState("");
   const [formReferencia, setFormReferencia] = useState("");
-  const [formCategoria, setFormCategoria] = useState("3");
+  const [formCategoria, setFormCategoria] = useState("");
   const [docsPend, setDocsPend] = useState<DocPend[]>([]);
   const [busqAux, setBusqAux] = useState("");
+
+  const [filtroEstado, setFiltroEstado] = useState<"todos" | "pendientes" | "contabilizados">("todos");
+  const [filtroTipo, setFiltroTipo] = useState<"todos" | "abonos" | "cargos">("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
 
   const cargarResumen = (year?: number) => {
     const y = year || anio;
@@ -78,11 +84,15 @@ export default function ConciliacionClient({
   const cargarMovimientos = (mes: number) => {
     startTransition(async () => {
       setMesActivo(mes);
-      const { movimientos: m, error } = await getMovimientosCartola(anio, mes, soloNoCont);
+      const { movimientos: m, error } = await getMovimientosCartola(anio, mes, false);
       if (error) { setMensaje({ tipo: "error", texto: error }); return; }
       setMovimientos(m);
       setVista("movimientos");
       setMensaje(null);
+      setFiltroEstado("todos");
+      setFiltroTipo("todos");
+      setBusqueda("");
+      setSeleccionados(new Set());
     });
   };
 
@@ -94,7 +104,7 @@ export default function ConciliacionClient({
     setFormTipoDoc("");
     setFormNumDoc("");
     setFormReferencia("");
-    setFormCategoria(esAbono ? "1" : "2");
+    setFormCategoria(esAbono ? "OP-COB" : "OP-PROV");
     setFormCuenta("");
     setFormAuxiliar(mov.rut_extraido || "");
     setBusqAux(mov.rut_extraido || "");
@@ -172,11 +182,11 @@ export default function ConciliacionClient({
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+      const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
       let headerIdx = -1;
       for (let i = 0; i < Math.min(20, rows.length); i++) {
-        const row = rows[i]?.map((c) => String(c || "").toUpperCase()) || [];
+        const row = rows[i]?.map((c) => String(c ?? "").toUpperCase()) || [];
         if (row.some((c) => c.includes("MONTO")) && row.some((c) => c.includes("DESCRIPCI"))) {
           headerIdx = i;
           break;
@@ -197,21 +207,26 @@ export default function ConciliacionClient({
       }> = [];
 
       for (const row of dataRows) {
-        const montoRaw = String(row[0] || "").replace(/\./g, "").replace(",", ".");
-        const monto = Math.abs(parseFloat(montoRaw) || 0);
+        const monto = Math.abs(Number(row[0]) || 0);
         if (monto === 0) continue;
 
         const descripcion = String(row[1] || "").trim();
-        const fechaRaw = String(row[2] || "").trim();
-        const saldoRaw = String(row[3] || "").replace(/\./g, "").replace(",", ".");
-        const saldo = parseFloat(saldoRaw) || 0;
+        const fechaCell = row[2];
+        const saldo = Math.abs(Number(row[3]) || 0);
         const numDoc = String(row[4] || "").trim();
         const sucursal = String(row[5] || "").trim();
         const cargoAbono = String(row[6] || "").trim().toUpperCase();
 
-        const parts = fechaRaw.split("/");
-        if (parts.length !== 3) continue;
-        const fecha = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+        let fecha = "";
+        if (fechaCell instanceof Date) {
+          const d = fechaCell;
+          fecha = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        } else {
+          const parts = String(fechaCell || "").trim().split("/");
+          if (parts.length !== 3) continue;
+          fecha = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+        }
+        if (!fecha) continue;
 
         movs.push({
           monto, descripcion, fecha, saldo,
@@ -261,6 +276,45 @@ export default function ConciliacionClient({
     : [];
 
   const porcentajeContab = stats.totalMovs > 0 ? Math.round((stats.contabilizados / stats.totalMovs) * 100) : 0;
+
+  const movsFiltrados = movimientos.filter((m) => {
+    if (filtroEstado === "pendientes" && m.contabilizado) return false;
+    if (filtroEstado === "contabilizados" && !m.contabilizado) return false;
+    if (filtroTipo === "abonos" && m.cargo_abono !== "A") return false;
+    if (filtroTipo === "cargos" && m.cargo_abono === "A") return false;
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      return m.descripcion.toLowerCase().includes(q) || m.rut_extraido.toLowerCase().includes(q) || String(m.monto).includes(q);
+    }
+    return true;
+  });
+
+  const mesStats = {
+    total: movimientos.length,
+    pendientes: movimientos.filter((m) => !m.contabilizado).length,
+    contabilizados: movimientos.filter((m) => m.contabilizado).length,
+    abonos: movimientos.filter((m) => m.cargo_abono === "A"),
+    cargos: movimientos.filter((m) => m.cargo_abono !== "A"),
+    totalAbonos: movimientos.filter((m) => m.cargo_abono === "A").reduce((s, m) => s + Math.abs(m.monto), 0),
+    totalCargos: movimientos.filter((m) => m.cargo_abono !== "A").reduce((s, m) => s + Math.abs(m.monto), 0),
+  };
+
+  const toggleSeleccion = (id: number) => {
+    setSeleccionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleTodos = () => {
+    const pendFiltrados = movsFiltrados.filter((m) => !m.contabilizado);
+    if (seleccionados.size === pendFiltrados.length && pendFiltrados.length > 0) {
+      setSeleccionados(new Set());
+    } else {
+      setSeleccionados(new Set(pendFiltrados.map((m) => m.id)));
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -469,110 +523,197 @@ export default function ConciliacionClient({
 
       {/* Lista movimientos */}
       {vista === "movimientos" && mesActivo && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              <button onClick={() => { setVista("dashboard"); setMovimientos([]); }} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-              </button>
-              <div className="min-w-0">
-                <h3 className="font-semibold text-gray-900 text-sm sm:text-base truncate">{MESES[mesActivo]} {anio}</h3>
-                <p className="text-xs text-gray-500">{movimientos.length} movimientos</p>
-              </div>
+        <div className="space-y-3">
+          {/* Header mes */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button onClick={() => { setVista("dashboard"); setMovimientos([]); }} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <h3 className="font-semibold text-gray-900 text-base sm:text-lg">{MESES[mesActivo]} {anio}</h3>
+          </div>
+
+          {/* KPIs del mes */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
+            <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-indigo-600">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Saldo Banco</p>
+              <p className="text-base sm:text-lg font-bold text-gray-900">${saldoActual.toLocaleString("es-CL")}</p>
             </div>
-            <label className="flex items-center gap-1.5 text-xs sm:text-sm cursor-pointer select-none flex-shrink-0">
-              <input type="checkbox" checked={soloNoCont} onChange={(e) => { setSoloNoCont(e.target.checked); cargarMovimientos(mesActivo); }} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-              <span className="text-gray-600 hidden sm:inline">Solo pendientes</span>
-              <span className="text-gray-600 sm:hidden">Pend.</span>
-            </label>
+            <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-amber-500">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Pendientes</p>
+              <p className="text-base sm:text-lg font-bold text-amber-600">{mesStats.pendientes}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-emerald-500">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Contabilizados</p>
+              <p className="text-base sm:text-lg font-bold text-emerald-600">{mesStats.contabilizados}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-blue-500">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Abonos</p>
+              <p className="text-base sm:text-lg font-bold text-emerald-600">${mesStats.totalAbonos.toLocaleString("es-CL")}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-red-500 col-span-2 sm:col-span-1">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Cargos</p>
+              <p className="text-base sm:text-lg font-bold text-red-600">${mesStats.totalCargos.toLocaleString("es-CL")}</p>
+            </div>
           </div>
 
-          {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Descripción</th>
-                  <th className="px-4 py-3 text-right font-medium">Monto</th>
-                  <th className="px-4 py-3 text-right font-medium">Saldo</th>
-                  <th className="px-4 py-3 text-center font-medium">Estado</th>
-                  <th className="px-4 py-3 text-center font-medium">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {movimientos.map((m) => (
-                  <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-2.5 whitespace-nowrap text-gray-600 text-xs">{m.fecha}</td>
-                    <td className="px-4 py-2.5 max-w-[300px] truncate text-gray-900" title={m.descripcion}>{m.descripcion}</td>
-                    <td className={`px-4 py-2.5 text-right font-mono font-semibold whitespace-nowrap ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
-                      {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-gray-500 whitespace-nowrap text-xs">{formatMonto(m.saldo)}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      {m.contabilizado
-                        ? <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">OK</span>
-                        : <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Pend.</span>}
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      {!m.contabilizado ? (
-                        <button onClick={() => abrirContabilizar(m)} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors">
-                          Contabilizar
-                        </button>
-                      ) : (
-                        <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 transition-colors">
-                          Anular
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="md:hidden divide-y divide-gray-100">
-            {movimientos.map((m) => (
-              <div key={m.id} className="px-4 py-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-gray-900 truncate">{m.descripcion}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{m.fecha}</p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className={`font-mono font-semibold text-sm ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
-                      {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
-                    </p>
-                    <p className="text-[11px] text-gray-400 font-mono">Saldo: {formatMonto(m.saldo)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${m.cargo_abono === "A" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                      {m.cargo_abono === "A" ? "ABONO" : "CARGO"}
-                    </span>
-                    {m.contabilizado
-                      ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Contab.</span>
-                      : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Pendiente</span>}
-                  </div>
-                  {!m.contabilizado ? (
-                    <button onClick={() => abrirContabilizar(m)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
-                      Contabilizar
-                    </button>
-                  ) : (
-                    <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100">
-                      Anular
-                    </button>
-                  )}
-                </div>
+          {/* Filtros + Buscador + Acciones */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              {/* Filtro estado */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                <button onClick={() => setFiltroEstado("todos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroEstado === "todos" ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Todos <span className="ml-0.5 opacity-70">{mesStats.total}</span>
+                </button>
+                <button onClick={() => setFiltroEstado("pendientes")} className={`px-2.5 sm:px-3 py-1.5 border-x border-gray-200 transition-colors ${filtroEstado === "pendientes" ? "bg-amber-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Pendientes <span className="ml-0.5 opacity-70">{mesStats.pendientes}</span>
+                </button>
+                <button onClick={() => setFiltroEstado("contabilizados")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroEstado === "contabilizados" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Contabilizados <span className="ml-0.5 opacity-70">{mesStats.contabilizados}</span>
+                </button>
               </div>
-            ))}
+
+              {/* Filtro tipo */}
+              <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                <button onClick={() => setFiltroTipo("todos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroTipo === "todos" ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Todos
+                </button>
+                <button onClick={() => setFiltroTipo("abonos")} className={`px-2.5 sm:px-3 py-1.5 border-x border-gray-200 transition-colors ${filtroTipo === "abonos" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Abonos <span className="ml-0.5 opacity-70">{mesStats.abonos.length}</span>
+                </button>
+                <button onClick={() => setFiltroTipo("cargos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroTipo === "cargos" ? "bg-red-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  Cargos <span className="ml-0.5 opacity-70">{mesStats.cargos.length}</span>
+                </button>
+              </div>
+
+              {/* Buscador */}
+              <div className="relative flex-1 min-w-[180px]">
+                <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                <input
+                  type="text"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Buscar por glosa, RUT o monto..."
+                  className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+                />
+              </div>
+
+              {/* Contabilizar Seleccionados */}
+              <button
+                onClick={() => {
+                  if (seleccionados.size === 0) return;
+                  const pendSel = movimientos.filter((m) => seleccionados.has(m.id) && !m.contabilizado);
+                  if (pendSel.length > 0) abrirContabilizar(pendSel[0]);
+                }}
+                disabled={seleccionados.size === 0}
+                className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-40 transition-colors whitespace-nowrap"
+              >
+                Contabilizar Seleccionados ({seleccionados.size})
+              </button>
+            </div>
           </div>
 
-          {movimientos.length === 0 && (
-            <div className="p-8 sm:p-12 text-center text-gray-400 text-sm">No hay movimientos para este mes.</div>
-          )}
+          {/* Tabla movimientos */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                    <th className="px-3 py-3 text-center font-medium w-10">
+                      <input type="checkbox" checked={seleccionados.size > 0 && seleccionados.size === movsFiltrados.filter((m) => !m.contabilizado).length} onChange={toggleTodos} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                    </th>
+                    <th className="px-3 py-3 text-left font-medium">Fecha</th>
+                    <th className="px-3 py-3 text-left font-medium">Descripción</th>
+                    <th className="px-3 py-3 text-right font-medium">Monto</th>
+                    <th className="px-3 py-3 text-right font-medium">Saldo</th>
+                    <th className="px-3 py-3 text-center font-medium">Estado</th>
+                    <th className="px-3 py-3 text-center font-medium">Acción</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {movsFiltrados.map((m) => (
+                    <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${seleccionados.has(m.id) ? "bg-indigo-50/50" : ""}`}>
+                      <td className="px-3 py-2.5 text-center">
+                        {!m.contabilizado && (
+                          <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 text-xs">{m.fecha}</td>
+                      <td className="px-3 py-2.5 max-w-[300px] truncate text-gray-900" title={m.descripcion}>{m.descripcion}</td>
+                      <td className={`px-3 py-2.5 text-right font-mono font-semibold whitespace-nowrap ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
+                        {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-gray-500 whitespace-nowrap text-xs">{formatMonto(m.saldo)}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {m.contabilizado
+                          ? <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">OK</span>
+                          : <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Pend.</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        {!m.contabilizado ? (
+                          <button onClick={() => abrirContabilizar(m)} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors">
+                            Contabilizar
+                          </button>
+                        ) : (
+                          <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 transition-colors">
+                            Anular
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {movsFiltrados.map((m) => (
+                <div key={m.id} className={`px-4 py-3 space-y-2 ${seleccionados.has(m.id) ? "bg-indigo-50/50" : ""}`}>
+                  <div className="flex items-start gap-2">
+                    {!m.contabilizado && (
+                      <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mt-1 flex-shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-gray-900 truncate">{m.descripcion}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{m.fecha}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className={`font-mono font-semibold text-sm ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
+                        {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
+                      </p>
+                      <p className="text-[11px] text-gray-400 font-mono">Saldo: {formatMonto(m.saldo)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${m.cargo_abono === "A" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                        {m.cargo_abono === "A" ? "ABONO" : "CARGO"}
+                      </span>
+                      {m.contabilizado
+                        ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Contab.</span>
+                        : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Pendiente</span>}
+                    </div>
+                    {!m.contabilizado ? (
+                      <button onClick={() => abrirContabilizar(m)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
+                        Contabilizar
+                      </button>
+                    ) : (
+                      <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100">
+                        Anular
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {movsFiltrados.length === 0 && (
+              <div className="p-8 sm:p-12 text-center text-gray-400 text-sm">
+                {movimientos.length === 0 ? "No hay movimientos para este mes." : "No hay movimientos que coincidan con los filtros."}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -696,11 +837,10 @@ export default function ConciliacionClient({
             <div>
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Categoría flujo</label>
               <select value={formCategoria} onChange={(e) => setFormCategoria(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
-                <option value="1">Cobranza</option>
-                <option value="2">Pagos proveedores</option>
-                <option value="3">Gastos operacionales</option>
-                <option value="4">Honorarios</option>
-                <option value="5">Retiros/Distribuciones</option>
+                <option value="">Seleccionar...</option>
+                {categoriasFlujo.map((c) => (
+                  <option key={c.id} value={c.codigo}>{c.nombre}</option>
+                ))}
               </select>
             </div>
           </div>
