@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 const COMISION_NL = 0.15;
 const IVA = 0.19;
@@ -47,6 +48,7 @@ function calcularDesglose(monto: number) {
 }
 
 export async function cargarTransacciones(transacciones: TransaccionInput[]) {
+  await requireRol("comercial");
   const supabase = await createClient();
   const lote = `CARGA-${Date.now()}`;
 
@@ -111,6 +113,7 @@ export async function getTransacciones(filtros?: {
 }
 
 export async function marcarPagado(ids: number[], referencia: string, fechaPago: string) {
+  await requireRol("comercial");
   const supabase = await createClient();
   const { error } = await supabase
     .from("marketplace_transacciones")
@@ -123,6 +126,7 @@ export async function marcarPagado(ids: number[], referencia: string, fechaPago:
 }
 
 export async function anularTransaccion(id: number) {
+  await requireRol("comercial");
   const supabase = await createClient();
   const { error } = await supabase
     .from("marketplace_transacciones")
@@ -186,6 +190,7 @@ export type RentabilidadPlataforma = {
 };
 
 export async function marcarBoletaEmitida(ids: number[], folio: string, fecha: string) {
+  await requireRol("comercial");
   const supabase = await createClient();
   const { error } = await supabase
     .from("marketplace_transacciones")

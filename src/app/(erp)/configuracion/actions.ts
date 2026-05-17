@@ -2,10 +2,12 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 // ─── Config empresa ────────────────────────────────────────────────────
 
 export async function updateConfig(clave: string, valor: string) {
+  await requireRol("admin");
   const supabase = await createClient();
   const { error } = await supabase
     .from("config")
@@ -140,6 +142,7 @@ export async function getUsuarios() {
 }
 
 export async function crearUsuario(data: { email: string; password: string; nombre: string; rol: string }) {
+  await requireRol("admin");
   const supabase = await createClient();
 
   const { data: existing } = await supabase
@@ -191,6 +194,7 @@ export async function crearUsuario(data: { email: string; password: string; nomb
 }
 
 export async function actualizarUsuario(id: number, data: { nombre: string; rol: string }) {
+  await requireRol("admin");
   const supabase = await createClient();
   const { error } = await supabase
     .from("user_roles")
@@ -202,6 +206,7 @@ export async function actualizarUsuario(id: number, data: { nombre: string; rol:
 }
 
 export async function toggleUsuario(id: number, activo: boolean) {
+  await requireRol("admin");
   const supabase = await createClient();
   const { error } = await supabase
     .from("user_roles")

@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { enviarEmail, buildCobranzaHtml, getAsuntoCobranza, type DocCobranza } from "@/lib/email";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 export async function enviarCorreoCobranza(params: {
   rut: string;
@@ -15,6 +16,7 @@ export async function enviarCorreoCobranza(params: {
   mes: number;
   anio: number;
 }) {
+  await requireRol("comercial");
   const asunto = getAsuntoCobranza(params.nivel);
   const html = buildCobranzaHtml({
     nombre: params.nombre,

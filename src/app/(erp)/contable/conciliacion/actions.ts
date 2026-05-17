@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { crearComprobante } from "../comprobantes/actions";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 async function getConfig() {
   const supabase = await createClient();
@@ -136,6 +137,7 @@ export type ContabilizarInput = {
 };
 
 export async function contabilizarMovimiento(input: ContabilizarInput) {
+  await requireRol("contador");
   const supabase = await createClient();
   const config = await getConfig();
 
@@ -223,6 +225,7 @@ export async function contabilizarMovimiento(input: ContabilizarInput) {
 // ─── Contabilizar lote ──────────────────────────────────────────────────
 
 export async function contabilizarLote(items: ContabilizarInput[]) {
+  await requireRol("contador");
   const resultados: { id: number; ok: boolean; error?: string }[] = [];
 
   for (const item of items) {
@@ -241,6 +244,7 @@ export async function contabilizarLote(items: ContabilizarInput[]) {
 // ─── Anular contabilización ─────────────────────────────────────────────
 
 export async function anularContabilizacion(cartolaId: number) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   const { data: mov } = await supabase
@@ -305,12 +309,12 @@ export async function cargarCartolaSantander(movimientos: Array<{
   sucursal: string;
   cargo_abono: string;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   const errores: string[] = [];
   let nuevos = 0;
   let duplicados = 0;
 
-  // Generate MD5 huellas and prepare records
   const { createHash } = await import("crypto");
 
   const huellaCount = new Map<string, number>();
@@ -370,6 +374,7 @@ export async function cargarCartolaMP(movimientos: Array<{
   comisiones: number;
   monto_neto: number;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   let nuevos = 0;
   let duplicados = 0;
@@ -495,6 +500,7 @@ function extraerRUTDeDescripcion(desc: string): string {
 }
 
 export async function matchAutomatico(anio: number, mes: number, banco?: string): Promise<MatchResult> {
+  await requireRol("contador");
   const supabase = await createClient();
   const config = await getConfig();
   const ctaClientes = config.CUENTA_CLIENTES || "1-1-03-001";

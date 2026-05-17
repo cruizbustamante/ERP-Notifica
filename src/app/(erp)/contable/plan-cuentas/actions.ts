@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 export async function crearCuenta(data: {
   codigo: string;
@@ -12,6 +13,7 @@ export async function crearCuenta(data: {
   conciliable: string;
   nivel: number;
 }) {
+  await requireRol("contador");
   if (!/^\d-\d-\d{2}-\d{3}$/.test(data.codigo)) {
     return { error: "Formato de código inválido. Use X-X-XX-XXX" };
   }
@@ -60,6 +62,7 @@ export async function actualizarCuenta(
     conciliable: string;
   }
 ) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   const { error } = await supabase
@@ -79,6 +82,7 @@ export async function actualizarCuenta(
 }
 
 export async function toggleEstado(id: number, nuevoEstado: string) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   if (nuevoEstado === "N") {

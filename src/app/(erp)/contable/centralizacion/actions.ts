@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { crearComprobante } from "../comprobantes/actions";
 import { revalidatePath } from "next/cache";
 import { normalizeRut } from "@/lib/rut";
+import { requireRol } from "@/lib/auth";
 
 const MAPA_DTE: Record<number, string> = {
   33: "FAC", 34: "FEX", 39: "BV", 41: "BVE",
@@ -100,6 +101,7 @@ export async function upsertRegla(data: {
   cuenta_codigo: string;
   descripcion: string;
 }) {
+  await requireRol("contador");
   const supabase = await createClient();
   if (data.id) {
     const { error } = await supabase.from("reglas_centralizacion").update(data).eq("id", data.id);
@@ -113,6 +115,7 @@ export async function upsertRegla(data: {
 }
 
 export async function deleteRegla(id: number) {
+  await requireRol("contador");
   const supabase = await createClient();
   const { error } = await supabase.from("reglas_centralizacion").update({ estado: "N" }).eq("id", id);
   if (error) return { error: error.message };
@@ -382,6 +385,7 @@ export async function centralizarDocumentos(
   cuentaContrapartida: string,
   docIds: number[]
 ) {
+  await requireRol("contador");
   const supabase = await createClient();
   const config = await getConfig();
 
@@ -485,6 +489,7 @@ export async function centralizarDocumentos(
 // ─── Anular centralización ──────────────────────────────────────────────
 
 export async function anularCentralizacion(centralizacionId: number) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   const { data: cent } = await supabase
@@ -535,6 +540,7 @@ export async function cargarExcelVentas(registros: Array<{
   tipo_doc_ref?: number;
   folio_doc_ref?: string;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   const { createHash } = await import("crypto");
   let nuevos = 0, duplicados = 0;
@@ -585,6 +591,7 @@ export async function cargarExcelCompras(registros: Array<{
   tipo_doc_ref?: number;
   folio_doc_ref?: string;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   const { createHash } = await import("crypto");
   let nuevos = 0, duplicados = 0;
@@ -631,6 +638,7 @@ export async function cargarExcelHonorarios(registros: Array<{
   retencion: number;
   monto_liquido: number;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   const { createHash } = await import("crypto");
   let nuevos = 0, duplicados = 0;
@@ -675,6 +683,7 @@ export async function cargarExcelTransbank(registros: Array<{
   iva_comision: number;
   monto_neto: number;
 }>) {
+  await requireRol("contador");
   const supabase = await createClient();
   const { createHash } = await import("crypto");
   let nuevos = 0, duplicados = 0;

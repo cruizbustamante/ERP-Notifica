@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { enviarEmail, buildFacturaHtml, getAsuntoFactura } from "@/lib/email";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 const MESES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 
@@ -16,6 +17,7 @@ export async function enviarCorreoFactura(params: {
   mes: number;
   anio: number;
 }) {
+  await requireRol("comercial");
   const periodo = `${MESES[params.mes]} ${params.anio}`;
   const asunto = getAsuntoFactura(params.facturacionTipo, periodo);
   const html = buildFacturaHtml({

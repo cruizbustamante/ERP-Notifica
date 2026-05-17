@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 type LineaData = {
   cuenta_codigo: string;
@@ -21,6 +22,7 @@ export async function crearComprobante(data: {
   glosa: string;
   lineas: LineaData[];
 }) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   // 1. Mínimo 2 líneas
@@ -240,6 +242,7 @@ export async function crearComprobante(data: {
 }
 
 export async function anularComprobante(id: number) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   // Verificar que el comprobante existe y está vigente
@@ -323,6 +326,7 @@ export async function actualizarComprobante(
   id: number,
   data: { fecha: string; glosa: string; lineas: LineaData[] }
 ) {
+  await requireRol("contador");
   const supabase = await createClient();
 
   const { data: comp } = await supabase

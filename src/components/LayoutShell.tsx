@@ -7,6 +7,15 @@ import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
+type Rol = "admin" | "contador" | "comercial" | "consulta";
+
+const JERARQUIA: Record<Rol, number> = {
+  admin: 4,
+  contador: 3,
+  comercial: 2,
+  consulta: 1,
+};
+
 type Props = {
   user: { email: string; rol: string; nombre: string };
   children: React.ReactNode;
@@ -18,12 +27,14 @@ const NAV_SECTIONS = [
     icon: "📊",
     href: "/inicio",
     segment: "inicio",
+    minRol: "consulta" as Rol,
   },
   {
     label: "Contabilidad",
     icon: "📋",
     href: "/contable/comprobantes",
     segment: "contable",
+    minRol: "contador" as Rol,
     matchPaths: ["/contable/comprobantes", "/contable/centralizacion", "/contable/conciliacion", "/contable/plan-cuentas", "/contable/cierre"],
     children: [
       { label: "Comprobantes", href: "/contable/comprobantes" },
@@ -38,6 +49,7 @@ const NAV_SECTIONS = [
     icon: "📄",
     href: "/contable/libros-tributarios",
     segment: "informes",
+    minRol: "consulta" as Rol,
     matchPaths: ["/contable/libros-tributarios", "/contable/libro-diario", "/contable/libro-mayor", "/contable/balance", "/gestion/estado-resultados", "/gestion/situacion-financiera", "/gestion/flujo-efectivo"],
     children: [
       { label: "Libros Tributarios", href: "/contable/libros-tributarios" },
@@ -54,6 +66,7 @@ const NAV_SECTIONS = [
     icon: "💰",
     href: "/comercial/clientes",
     segment: "comercial",
+    minRol: "comercial" as Rol,
     children: [
       { label: "Ficha Clientes", href: "/comercial/clientes" },
       { label: "Facturación", href: "/comercial/facturacion" },
@@ -69,6 +82,7 @@ const NAV_SECTIONS = [
     icon: "📈",
     href: "/gestion/dashboard",
     segment: "gestion",
+    minRol: "comercial" as Rol,
     matchPaths: ["/gestion/dashboard", "/gestion/indicadores", "/gestion/rentabilidad", "/gestion/cartera"],
     children: [
       { label: "Dashboard", href: "/gestion/dashboard" },
@@ -82,6 +96,7 @@ const NAV_SECTIONS = [
     icon: "⚙️",
     href: "/configuracion",
     segment: "configuracion",
+    minRol: "admin" as Rol,
     children: [
       { label: "Empresa", href: "/configuracion?tab=empresa" },
       { label: "Centralización", href: "/configuracion?tab=centralizacion" },
@@ -158,7 +173,7 @@ export default function LayoutShell({ user, children }: Props) {
 
           {/* Navigation */}
           <nav className="flex-1 overflow-y-auto py-3 px-3">
-            {NAV_SECTIONS.map((section) => {
+            {NAV_SECTIONS.filter((s) => JERARQUIA[(user.rol as Rol) || "consulta"] >= JERARQUIA[s.minRol]).map((section) => {
               const isActive = activeSegment === section.segment;
               const isExpanded = expandedSection === section.segment;
 

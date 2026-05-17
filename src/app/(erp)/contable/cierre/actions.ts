@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { crearComprobante } from "../comprobantes/actions";
 import { revalidatePath } from "next/cache";
+import { requireRol } from "@/lib/auth";
 
 export type PreviewCierre = {
   anio: number;
@@ -31,6 +32,7 @@ export async function getPeriodos() {
 }
 
 export async function crearPeriodo(anio: number) {
+  await requireRol("admin");
   const supabase = await createClient();
 
   const { data: existe } = await supabase
@@ -205,6 +207,7 @@ export async function previsualizarApertura(anioOrigen: number): Promise<{ data:
 }
 
 export async function cerrarPeriodo(anio: number) {
+  await requireRol("admin");
   const supabase = await createClient();
 
   const { data: periodo } = await supabase
@@ -317,6 +320,7 @@ export async function cerrarPeriodo(anio: number) {
 }
 
 export async function generarApertura(anioOrigen: number) {
+  await requireRol("admin");
   const supabase = await createClient();
   const anioDestino = anioOrigen + 1;
 
