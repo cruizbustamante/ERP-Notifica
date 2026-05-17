@@ -869,14 +869,13 @@ function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: R
 
 function buildLineasHonorarios(docs: DocHonorario[], cuentaGasto: string, config: Record<string, string>, reglasMap: Map<string, string>) {
   const ctaGastoDefault = cuentaGasto || config.CENT_CTA_HONORARIOS_GASTO || "5-1-02-001";
-  const ctaRetencion = config.CENT_CTA_RETENCION || "2-1-05-001";
-  const ctaHonPagar = config.CENT_CTA_HONORARIOS_PAGAR || "2-1-03-001";
+  const ctaRetencion = config.CENT_CTA_RETENCION || "2-1-07-001";
+  const ctaHonPagar = config.CENT_CTA_HONORARIOS_PAGAR || "2-1-04-001";
 
   type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
   const lineas: Linea[] = [];
   const gastosPorCuenta = new Map<string, number>();
   let totalRetencion = 0;
-  let totalLiquido = 0;
 
   for (const doc of docs) {
     const bruto = Math.round(Math.abs(doc.monto_bruto));
@@ -900,7 +899,6 @@ function buildLineasHonorarios(docs: DocHonorario[], cuentaGasto: string, config
     const ctaGasto = reglasMap.get(doc.rut) || ctaGastoDefault;
     gastosPorCuenta.set(ctaGasto, (gastosPorCuenta.get(ctaGasto) || 0) + bruto);
     totalRetencion += retencion;
-    totalLiquido += liquido;
   }
 
   // Líneas resumen Gasto Honorarios (una por cuenta)
@@ -916,7 +914,7 @@ function buildLineasHonorarios(docs: DocHonorario[], cuentaGasto: string, config
     }
   }
 
-  // Retención por pagar (resumen)
+  // Retención Honorarios (resumen)
   if (totalRetencion !== 0) {
     lineas.push({
       cuenta_codigo: ctaRetencion,
