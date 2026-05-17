@@ -812,9 +812,18 @@ export default function CentralizacionClient({
                     </tr>
                   </thead>
                   <tbody>
-                    {docs.map((d) => {
+                    {docs.map((d, idx) => {
                       const regla = reglas.find((r) => r.rut === d.rut && r.tipo === libroActivo!.toUpperCase());
+                      const prev = idx > 0 ? docs[idx - 1] : null;
+                      const showSep = prev && prev.tipo_dte_nombre !== d.tipo_dte_nombre;
                       return (
+                        <>{showSep && (
+                          <tr key={`sep-${d.id}`} className="bg-gray-100">
+                            <td colSpan={10} className="py-1.5 px-3 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                              {d.esNC ? "Notas de Crédito" : d.esND ? "Notas de Débito" : d.tipo_dte === 39 || d.tipo_dte === 41 ? "Boletas" : d.tipo_dte_nombre}
+                            </td>
+                          </tr>
+                        )}
                         <tr key={d.id} className={`border-b last:border-0 hover:bg-gray-50 ${d.esNC ? "text-red-600" : d.esND ? "text-orange-600" : ""}`}>
                           <td className="py-1.5"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => toggleDoc(d.id)} /></td>
                           <td className="py-1.5">
@@ -842,7 +851,7 @@ export default function CentralizacionClient({
                             ) : null}
                           </td>
                           <td className="py-1.5 text-xs text-gray-500">{d.ref_tipo && d.ref_folio ? `${d.ref_tipo} ${d.ref_folio}` : ""}</td>
-                        </tr>
+                        </tr></>
                       );
                     })}
                   </tbody>

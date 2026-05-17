@@ -296,9 +296,20 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
     };
   });
 
+  // Completar razón social vacía desde auxiliares
+  const rutsSinNombre = [...new Set(docs.filter(d => !d.razon_social).map(d => d.rut).filter(Boolean))];
+  if (rutsSinNombre.length > 0) {
+    const { data: auxData } = await supabase.from("auxiliares").select("rut, razon_social").in("rut", rutsSinNombre);
+    const auxMap = new Map((auxData || []).map(a => [a.rut, a.razon_social]));
+    for (const d of docs) {
+      if (!d.razon_social && auxMap.has(d.rut)) d.razon_social = auxMap.get(d.rut)!;
+    }
+  }
+
+  const ordenTipo = (d: DocPendiente) => d.esNC ? 3 : d.esND ? 2 : DTES_NOTA_CREDITO.includes(d.tipo_dte) || DTES_NOTA_DEBITO.includes(d.tipo_dte) ? 2 : d.tipo_dte === 39 || d.tipo_dte === 41 ? 1 : 0;
   docs.sort((a, b) => {
-    if (a.esNC !== b.esNC) return a.esNC ? 1 : -1;
-    if (a.esND !== b.esND) return a.esND ? 1 : -1;
+    const oa = ordenTipo(a), ob = ordenTipo(b);
+    if (oa !== ob) return oa - ob;
     return parseInt(a.folio) - parseInt(b.folio);
   });
 
