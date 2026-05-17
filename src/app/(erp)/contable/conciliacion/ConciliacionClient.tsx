@@ -10,10 +10,12 @@ import {
   anularContabilizacion,
   getDocsPendientesAuxiliar,
   cargarCartolaSantander,
+  cargarCartolaMP,
   matchAutomatico,
   type MovCartola,
   type ContabilizarInput,
   type MatchResult,
+  type BancoInfo,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -22,36 +24,33 @@ type Auxiliar = { rut: string; razon_social: string };
 type MesData = { abonos: number; cargos: number; pend: number; cont: number };
 type DocPend = { tipo_doc: string; num_doc: string; saldo: number };
 type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; orden: number };
-type Dashboard = {
-  saldo: number;
-  totalMovs: number;
-  pendientes: number;
-  contabilizados: number;
-  totalAbonos: number;
-  totalCargos: number;
-  porMes: Record<number, MesData>;
-};
+type SaldoBanco = { saldo: number; totalMovs: number; pendientes: number; contabilizados: number; totalAbonos: number; totalCargos: number };
 
 export default function ConciliacionClient({
-  periodos, cuentas, auxiliares, categoriasFlujo, currentYear, dashboard,
+  periodos, cuentas, auxiliares, categoriasFlujo, currentYear,
+  bancos, saldosPorBanco: initialSaldos, saldoConsolidado: initialConsolidado, porMesPorBanco: initialPorMes,
 }: {
   periodos: Periodo[];
   cuentas: Cuenta[];
   auxiliares: Auxiliar[];
   categoriasFlujo: CategoriaFlujo[];
   currentYear: number;
-  dashboard: Dashboard;
+  bancos: BancoInfo[];
+  saldosPorBanco: Record<string, SaldoBanco>;
+  saldoConsolidado: number;
+  porMesPorBanco: Record<string, Record<number, MesData>>;
 }) {
   const [anio, setAnio] = useState(currentYear);
-  const [resumen, setResumen] = useState<Record<number, MesData>>(dashboard.porMes);
+  const [bancoActivo, setBancoActivo] = useState(bancos[0]?.id || "CTE-SANTANDER");
+  const [resumen, setResumen] = useState<Record<number, MesData>>(initialPorMes[bancoActivo] || {});
+  const [saldos, setSaldos] = useState(initialSaldos);
+  const [consolidado] = useState(initialConsolidado);
   const [movimientos, setMovimientos] = useState<MovCartola[]>([]);
   const [mesActivo, setMesActivo] = useState<number | null>(null);
   const [vista, setVista] = useState<"dashboard" | "movimientos" | "contabilizar" | "upload">("dashboard");
   const [movActivo, setMovActivo] = useState<MovCartola | null>(null);
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [saldoActual] = useState(dashboard.saldo);
-  const [stats] = useState(dashboard);
 
   const [uploadResult, setUploadResult] = useState<{ nuevos: number; duplicados: number; errores: string[] } | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -75,12 +74,24 @@ export default function ConciliacionClient({
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
 
+  const bancoInfo = bancos.find((b) => b.id === bancoActivo) || bancos[0];
+  const stats = saldos[bancoActivo] || { saldo: 0, totalMovs: 0, pendientes: 0, contabilizados: 0, totalAbonos: 0, totalCargos: 0 };
+  const porcentajeContab = stats.totalMovs > 0 ? Math.round((stats.contabilizados / stats.totalMovs) * 100) : 0;
+
+  const cambiarBanco = (id: string) => {
+    setBancoActivo(id);
+    setResumen(initialPorMes[id] || {});
+    setMovimientos([]);
+    setMesActivo(null);
+    setVista("dashboard");
+  };
+
   const ejecutarMatchAutomatico = () => {
     if (!mesActivo) return;
     setMatchLoading(true);
     setMatchResult(null);
     startTransition(async () => {
-      const result = await matchAutomatico(anio, mesActivo);
+      const result = await matchAutomatico(anio, mesActivo, bancoActivo);
       setMatchResult(result);
       setMatchLoading(false);
       if (result.error) {
@@ -97,7 +108,7 @@ export default function ConciliacionClient({
   const cargarResumen = (year?: number) => {
     const y = year || anio;
     startTransition(async () => {
-      const data = await getResumenCartola(y);
+      const data = await getResumenCartola(y, bancoActivo);
       setResumen(data);
       setVista("dashboard");
       setMovimientos([]);
@@ -108,7 +119,7 @@ export default function ConciliacionClient({
   const cargarMovimientos = (mes: number) => {
     startTransition(async () => {
       setMesActivo(mes);
-      const { movimientos: m, error } = await getMovimientosCartola(anio, mes, false);
+      const { movimientos: m, error } = await getMovimientosCartola(anio, mes, false, bancoActivo);
       if (error) { setMensaje({ tipo: "error", texto: error }); return; }
       setMovimientos(m);
       setVista("movimientos");
@@ -208,77 +219,162 @@ export default function ConciliacionClient({
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-      let headerIdx = -1;
-      for (let i = 0; i < Math.min(20, rows.length); i++) {
-        const row = rows[i]?.map((c) => String(c ?? "").toUpperCase()) || [];
-        if (row.some((c) => c.includes("MONTO")) && row.some((c) => c.includes("DESCRIPCI"))) {
-          headerIdx = i;
-          break;
+      if (bancoActivo === "CTE-MP") {
+        // Parser Mercado Pago
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(20, rows.length); i++) {
+          const row = rows[i]?.map((c) => String(c ?? "").toUpperCase()) || [];
+          if (row.some((c) => c.includes("OPERACI")) && row.some((c) => c.includes("NETO"))) {
+            headerIdx = i;
+            break;
+          }
         }
-      }
+        if (headerIdx === -1) {
+          setMensaje({ tipo: "error", texto: "No se encontraron encabezados de Mercado Pago en el Excel" });
+          setUploading(false);
+          return;
+        }
 
-      if (headerIdx === -1) {
-        setMensaje({ tipo: "error", texto: "No se encontró la fila de encabezados en el Excel" });
-        setUploading(false);
-        return;
-      }
+        const headers = (rows[headerIdx] as string[]).map((c) => String(c ?? "").toUpperCase());
+        const idxOpId = headers.findIndex((c) => c.includes("OPERACI") && c.includes("MERCADO"));
+        const idxTipoPago = headers.findIndex((c) => c.includes("MEDIO") && c.includes("PAGO"));
+        const idxTipoOp = headers.findIndex((c) => c.includes("TIPO") && c.includes("OPERACI"));
+        const idxValor = headers.findIndex((c) => c.includes("VALOR") && c.includes("COMPRA"));
+        const idxFecha = headers.findIndex((c) => c.includes("FECHA") && c.includes("LIBERACI"));
+        const idxComision = headers.findIndex((c) => c.includes("COMISION") || c.includes("IVA"));
+        const idxNeto = headers.findIndex((c) => c.includes("NETO"));
 
-      const dataRows = rows.slice(headerIdx + 1).filter((r) => r && r.length >= 7 && r[2]);
+        if (idxOpId < 0 || idxNeto < 0) {
+          setMensaje({ tipo: "error", texto: "Columnas requeridas no encontradas (ID Operación, Monto Neto)" });
+          setUploading(false);
+          return;
+        }
 
-      const movs: Array<{
-        monto: number; descripcion: string; fecha: string;
-        saldo: number; num_doc: string; sucursal: string; cargo_abono: string;
-      }> = [];
+        const movs: Array<{
+          op_id: string; tipo_pago: string; tipo_operacion: string;
+          valor_compra: number; fecha: string; comisiones: number; monto_neto: number;
+        }> = [];
 
-      for (const row of dataRows) {
-        const monto = Math.abs(Number(row[0]) || 0);
-        if (monto === 0) continue;
+        for (const row of rows.slice(headerIdx + 1)) {
+          const arr = row as unknown[];
+          if (!arr || arr.length < 3) continue;
+          const opId = String(arr[idxOpId] || "").trim();
+          if (!opId) continue;
 
-        const descripcion = String(row[1] || "").trim();
-        const fechaCell = row[2];
-        const saldo = Math.abs(Number(row[3]) || 0);
-        const numDoc = String(row[4] || "").trim();
-        const sucursal = String(row[5] || "").trim();
-        const cargoAbono = String(row[6] || "").trim().toUpperCase();
+          const montoNeto = Number(String(arr[idxNeto] || "0").replace(/,/g, "."));
+          if (montoNeto === 0) continue;
 
-        let fecha = "";
-        if (fechaCell instanceof Date) {
-          const d = fechaCell;
-          fecha = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          let fecha = "";
+          const fechaRaw = String(arr[idxFecha >= 0 ? idxFecha : 4] || "");
+          if (fechaRaw.includes("T")) {
+            fecha = fechaRaw.split("T")[0];
+          } else if (fechaRaw.includes("/")) {
+            const parts = fechaRaw.split("/");
+            if (parts.length === 3) fecha = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+          } else {
+            fecha = fechaRaw.slice(0, 10);
+          }
+          if (!fecha || fecha.length < 10) continue;
+
+          movs.push({
+            op_id: opId,
+            tipo_pago: String(arr[idxTipoPago >= 0 ? idxTipoPago : 1] || ""),
+            tipo_operacion: String(arr[idxTipoOp >= 0 ? idxTipoOp : 2] || ""),
+            valor_compra: Number(String(arr[idxValor >= 0 ? idxValor : 3] || "0").replace(/,/g, ".")),
+            fecha,
+            comisiones: Number(String(arr[idxComision >= 0 ? idxComision : 5] || "0").replace(/,/g, ".")),
+            monto_neto: montoNeto,
+          });
+        }
+
+        if (movs.length === 0) {
+          setMensaje({ tipo: "error", texto: "No se encontraron movimientos válidos en el archivo MP" });
+          setUploading(false);
+          return;
+        }
+
+        const result = await cargarCartolaMP(movs);
+        setUploadResult(result);
+        if (result.nuevos > 0) {
+          setMensaje({ tipo: "ok", texto: `Cargados ${result.nuevos} movimientos MP. ${result.duplicados} duplicados omitidos.` });
+          cargarResumen();
         } else {
-          const parts = String(fechaCell || "").trim().split("/");
-          if (parts.length !== 3) continue;
-          fecha = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+          setMensaje({ tipo: "ok", texto: `Todos los ${result.duplicados} movimientos MP ya existían.` });
         }
-        if (!fecha) continue;
-
-        movs.push({
-          monto, descripcion, fecha, saldo,
-          num_doc: numDoc, sucursal,
-          cargo_abono: cargoAbono === "A" ? "A" : "C",
-        });
-      }
-
-      if (movs.length === 0) {
-        setMensaje({ tipo: "error", texto: "No se encontraron movimientos válidos en el archivo" });
-        setUploading(false);
-        return;
-      }
-
-      const result = await cargarCartolaSantander(movs);
-      setUploadResult(result);
-
-      if (result.nuevos > 0) {
-        setMensaje({ tipo: "ok", texto: `Cargados ${result.nuevos} movimientos nuevos. ${result.duplicados} duplicados omitidos.` });
-        cargarResumen();
       } else {
-        setMensaje({ tipo: "ok", texto: `Todos los ${result.duplicados} movimientos ya existían. Sin cambios.` });
+        // Parser Santander (existente)
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(20, rows.length); i++) {
+          const row = rows[i]?.map((c) => String(c ?? "").toUpperCase()) || [];
+          if (row.some((c) => c.includes("MONTO")) && row.some((c) => c.includes("DESCRIPCI"))) {
+            headerIdx = i;
+            break;
+          }
+        }
+
+        if (headerIdx === -1) {
+          setMensaje({ tipo: "error", texto: "No se encontró la fila de encabezados en el Excel" });
+          setUploading(false);
+          return;
+        }
+
+        const dataRows = rows.slice(headerIdx + 1).filter((r) => r && r.length >= 7 && r[2]);
+
+        const movs: Array<{
+          monto: number; descripcion: string; fecha: string;
+          saldo: number; num_doc: string; sucursal: string; cargo_abono: string;
+        }> = [];
+
+        for (const row of dataRows) {
+          const monto = Math.abs(Number(row[0]) || 0);
+          if (monto === 0) continue;
+
+          const descripcion = String(row[1] || "").trim();
+          const fechaCell = row[2];
+          const saldo = Math.abs(Number(row[3]) || 0);
+          const numDoc = String(row[4] || "").trim();
+          const sucursal = String(row[5] || "").trim();
+          const cargoAbono = String(row[6] || "").trim().toUpperCase();
+
+          let fecha = "";
+          if (fechaCell instanceof Date) {
+            const d = fechaCell;
+            fecha = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          } else {
+            const parts = String(fechaCell || "").trim().split("/");
+            if (parts.length !== 3) continue;
+            fecha = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+          }
+          if (!fecha) continue;
+
+          movs.push({
+            monto, descripcion, fecha, saldo,
+            num_doc: numDoc, sucursal,
+            cargo_abono: cargoAbono === "A" ? "A" : "C",
+          });
+        }
+
+        if (movs.length === 0) {
+          setMensaje({ tipo: "error", texto: "No se encontraron movimientos válidos en el archivo" });
+          setUploading(false);
+          return;
+        }
+
+        const result = await cargarCartolaSantander(movs);
+        setUploadResult(result);
+
+        if (result.nuevos > 0) {
+          setMensaje({ tipo: "ok", texto: `Cargados ${result.nuevos} movimientos nuevos. ${result.duplicados} duplicados omitidos.` });
+          cargarResumen();
+        } else {
+          setMensaje({ tipo: "ok", texto: `Todos los ${result.duplicados} movimientos ya existían. Sin cambios.` });
+        }
       }
     } catch (err) {
       setMensaje({ tipo: "error", texto: `Error procesando archivo: ${err}` });
     }
     setUploading(false);
-  }, [anio]);
+  }, [anio, bancoActivo]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -298,8 +394,6 @@ export default function ConciliacionClient({
   const auxFiltrados = busqAux
     ? auxiliares.filter((a) => a.rut.replace(/\./g, "").includes(busqAux.replace(/\./g, "")) || a.razon_social.toLowerCase().includes(busqAux.toLowerCase())).slice(0, 10)
     : [];
-
-  const porcentajeContab = stats.totalMovs > 0 ? Math.round((stats.contabilizados / stats.totalMovs) * 100) : 0;
 
   const movsFiltrados = movimientos.filter((m) => {
     if (filtroEstado === "pendientes" && m.contabilizado) return false;
@@ -340,14 +434,19 @@ export default function ConciliacionClient({
     }
   };
 
+  const bancoColors: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+    "CTE-SANTANDER": { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", icon: "text-red-500" },
+    "CTE-MP": { bg: "bg-sky-50", border: "border-sky-200", text: "text-sky-700", icon: "text-sky-500" },
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Conciliación Bancaria</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Santander · Cta. Cte. 0-000-9698176-7</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Conciliacion Bancaria</h1>
+            <p className="text-gray-500 text-sm mt-0.5">Saldo consolidado: <span className="font-semibold text-gray-900">${consolidado.toLocaleString("es-CL")}</span></p>
           </div>
           <div className="flex items-center gap-2">
             <select value={anio} onChange={(e) => { setAnio(Number(e.target.value)); cargarResumen(Number(e.target.value)); }} className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-shrink-0">
@@ -359,13 +458,42 @@ export default function ConciliacionClient({
             </button>
           </div>
         </div>
+
+        {/* Selector de banco */}
+        <div className="flex gap-2 mt-4">
+          {bancos.map((b) => {
+            const c = bancoColors[b.id] || bancoColors["CTE-SANTANDER"];
+            const s = saldos[b.id];
+            const active = bancoActivo === b.id;
+            return (
+              <button
+                key={b.id}
+                onClick={() => cambiarBanco(b.id)}
+                className={`flex-1 rounded-xl border-2 p-3 transition-all text-left ${
+                  active ? `${c.bg} ${c.border} ring-2 ring-offset-1 ring-${b.id === "CTE-MP" ? "sky" : "red"}-300` : "bg-white border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs font-semibold uppercase tracking-wide ${active ? c.text : "text-gray-500"}`}>{b.nombre}</span>
+                  {s && s.pendientes > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold">{s.pendientes} pend</span>
+                  )}
+                </div>
+                <p className={`text-lg font-bold mt-1 ${active ? "text-gray-900" : "text-gray-700"}`}>
+                  ${(s?.saldo || 0).toLocaleString("es-CL")}
+                </p>
+                {b.cuenta && <p className="text-[11px] text-gray-400 mt-0.5">{b.cuenta}</p>}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs del banco activo */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4 col-span-2 sm:col-span-1">
-          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Saldo Cartola</p>
-          <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-0.5">${saldoActual.toLocaleString("es-CL")}</p>
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Saldo {bancoInfo.nombre}</p>
+          <p className="text-lg sm:text-2xl font-bold text-gray-900 mt-0.5">${stats.saldo.toLocaleString("es-CL")}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
           <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Pendientes</p>
@@ -376,11 +504,11 @@ export default function ConciliacionClient({
           <p className="text-lg sm:text-2xl font-bold text-emerald-600 mt-0.5">{stats.contabilizados} <span className="text-xs font-normal text-gray-400">({porcentajeContab}%)</span></p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
-          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Abonos</p>
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Abonos {anio}</p>
           <p className="text-lg sm:text-xl font-bold text-emerald-600 mt-0.5">${(stats.totalAbonos / 1000000).toFixed(1)}M</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
-          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Cargos</p>
+          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">Cargos {anio}</p>
           <p className="text-lg sm:text-xl font-bold text-red-600 mt-0.5">${(stats.totalCargos / 1000000).toFixed(1)}M</p>
         </div>
       </div>
@@ -397,8 +525,12 @@ export default function ConciliacionClient({
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6 space-y-4">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <h3 className="text-base sm:text-lg font-semibold text-gray-900">Cargar Cartola Santander</h3>
-              <p className="text-xs sm:text-sm text-gray-500 mt-1">Solo se agregarán movimientos nuevos.</p>
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">Cargar Cartola {bancoInfo.nombre}</h3>
+              <p className="text-xs sm:text-sm text-gray-500 mt-1">
+                {bancoActivo === "CTE-MP"
+                  ? "Sube el archivo Excel de liquidación de Mercado Pago (settlement)."
+                  : "Sube el archivo Excel de cartola Santander."}
+              </p>
             </div>
             <button onClick={() => setVista("dashboard")} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -457,7 +589,7 @@ export default function ConciliacionClient({
       {vista === "dashboard" && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900 text-sm sm:text-base">Resumen mensual {anio}</h3>
+            <h3 className="font-semibold text-gray-900 text-sm sm:text-base">Resumen mensual {anio} — {bancoInfo.nombre}</h3>
           </div>
 
           {/* Desktop table */}
@@ -548,19 +680,17 @@ export default function ConciliacionClient({
       {/* Lista movimientos */}
       {vista === "movimientos" && mesActivo && (
         <div className="space-y-3">
-          {/* Header mes */}
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => { setVista("dashboard"); setMovimientos([]); }} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
             </button>
-            <h3 className="font-semibold text-gray-900 text-base sm:text-lg">{MESES[mesActivo]} {anio}</h3>
+            <h3 className="font-semibold text-gray-900 text-base sm:text-lg">{MESES[mesActivo]} {anio} — {bancoInfo.nombre}</h3>
           </div>
 
-          {/* KPIs del mes */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
             <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-indigo-600">
-              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Saldo Banco</p>
-              <p className="text-base sm:text-lg font-bold text-gray-900">${saldoActual.toLocaleString("es-CL")}</p>
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Saldo {bancoInfo.nombre}</p>
+              <p className="text-base sm:text-lg font-bold text-gray-900">${stats.saldo.toLocaleString("es-CL")}</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-3 border-l-4 border-l-amber-500">
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Pendientes</p>
@@ -580,10 +710,9 @@ export default function ConciliacionClient({
             </div>
           </div>
 
-          {/* Filtros + Buscador + Acciones */}
+          {/* Filtros */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-3 sm:p-4">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              {/* Filtro estado */}
               <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
                 <button onClick={() => setFiltroEstado("todos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroEstado === "todos" ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
                   Todos <span className="ml-0.5 opacity-70">{mesStats.total}</span>
@@ -592,15 +721,12 @@ export default function ConciliacionClient({
                   Pendientes <span className="ml-0.5 opacity-70">{mesStats.pendientes}</span>
                 </button>
                 <button onClick={() => setFiltroEstado("contabilizados")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroEstado === "contabilizados" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
-                  Contabilizados <span className="ml-0.5 opacity-70">{mesStats.contabilizados}</span>
+                  Contab. <span className="ml-0.5 opacity-70">{mesStats.contabilizados}</span>
                 </button>
               </div>
 
-              {/* Filtro tipo */}
               <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
-                <button onClick={() => setFiltroTipo("todos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroTipo === "todos" ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
-                  Todos
-                </button>
+                <button onClick={() => setFiltroTipo("todos")} className={`px-2.5 sm:px-3 py-1.5 transition-colors ${filtroTipo === "todos" ? "bg-gray-800 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>Todos</button>
                 <button onClick={() => setFiltroTipo("abonos")} className={`px-2.5 sm:px-3 py-1.5 border-x border-gray-200 transition-colors ${filtroTipo === "abonos" ? "bg-emerald-500 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
                   Abonos <span className="ml-0.5 opacity-70">{mesStats.abonos.length}</span>
                 </button>
@@ -609,53 +735,28 @@ export default function ConciliacionClient({
                 </button>
               </div>
 
-              {/* Buscador */}
               <div className="relative flex-1 min-w-[180px]">
                 <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-                <input
-                  type="text"
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder="Buscar por glosa, RUT o monto..."
-                  className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
-                />
+                <input type="text" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por glosa, RUT o monto..." className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
               </div>
 
-              {/* Match Automático */}
-              <button
-                onClick={ejecutarMatchAutomatico}
-                disabled={isPending || matchLoading || mesStats.pendientes === 0}
-                className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors whitespace-nowrap flex items-center gap-1.5"
-              >
+              <button onClick={ejecutarMatchAutomatico} disabled={isPending || matchLoading || mesStats.pendientes === 0}
+                className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors whitespace-nowrap flex items-center gap-1.5">
                 {matchLoading ? (
-                  <>
-                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    Buscando...
-                  </>
+                  <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Buscando...</>
                 ) : (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    Match Automático
-                  </>
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>Match Automático</>
                 )}
               </button>
 
-              {/* Contabilizar Seleccionados */}
-              <button
-                onClick={() => {
-                  if (seleccionados.size === 0) return;
-                  const pendSel = movimientos.filter((m) => seleccionados.has(m.id) && !m.contabilizado);
-                  if (pendSel.length > 0) abrirContabilizar(pendSel[0]);
-                }}
-                disabled={seleccionados.size === 0}
-                className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-40 transition-colors whitespace-nowrap"
-              >
-                Contabilizar Seleccionados ({seleccionados.size})
+              <button onClick={() => { if (seleccionados.size === 0) return; const pendSel = movimientos.filter((m) => seleccionados.has(m.id) && !m.contabilizado); if (pendSel.length > 0) abrirContabilizar(pendSel[0]); }}
+                disabled={seleccionados.size === 0} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-40 transition-colors whitespace-nowrap">
+                Contabilizar ({seleccionados.size})
               </button>
             </div>
           </div>
 
-          {/* Match Automático Result */}
+          {/* Match Result */}
           {matchResult && matchResult.matched > 0 && (
             <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -672,10 +773,7 @@ export default function ConciliacionClient({
                   <div key={i} className="bg-white rounded-lg p-2.5 border border-indigo-100 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="font-mono font-semibold text-gray-900">${formatMonto(d.monto)}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                        d.tipo_match === "exacto" ? "bg-emerald-100 text-emerald-700" :
-                        "bg-blue-100 text-blue-700"
-                      }`}>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${d.tipo_match === "exacto" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}`}>
                         {d.tipo_match === "exacto" ? "Exacto" : "Combinado"}
                       </span>
                     </div>
@@ -688,7 +786,6 @@ export default function ConciliacionClient({
 
           {/* Tabla movimientos */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            {/* Desktop table */}
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -708,16 +805,14 @@ export default function ConciliacionClient({
                   {movsFiltrados.map((m) => (
                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${seleccionados.has(m.id) ? "bg-indigo-50/50" : ""}`}>
                       <td className="px-3 py-2.5 text-center">
-                        {!m.contabilizado && (
-                          <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
-                        )}
+                        {!m.contabilizado && <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />}
                       </td>
                       <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 text-xs">{m.fecha}</td>
                       <td className="px-3 py-2.5 max-w-[300px] truncate text-gray-900" title={m.descripcion}>{m.descripcion}</td>
                       <td className={`px-3 py-2.5 text-right font-mono font-semibold whitespace-nowrap ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
                         {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono text-gray-500 whitespace-nowrap text-xs">{formatMonto(m.saldo)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-gray-500 whitespace-nowrap text-xs">{m.saldo > 0 ? formatMonto(m.saldo) : "—"}</td>
                       <td className="px-3 py-2.5 text-center">
                         {m.contabilizado
                           ? <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">OK</span>
@@ -725,13 +820,9 @@ export default function ConciliacionClient({
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         {!m.contabilizado ? (
-                          <button onClick={() => abrirContabilizar(m)} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors">
-                            Contabilizar
-                          </button>
+                          <button onClick={() => abrirContabilizar(m)} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors">Contabilizar</button>
                         ) : (
-                          <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 transition-colors">
-                            Anular
-                          </button>
+                          <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 transition-colors">Anular</button>
                         )}
                       </td>
                     </tr>
@@ -745,9 +836,7 @@ export default function ConciliacionClient({
               {movsFiltrados.map((m) => (
                 <div key={m.id} className={`px-4 py-3 space-y-2 ${seleccionados.has(m.id) ? "bg-indigo-50/50" : ""}`}>
                   <div className="flex items-start gap-2">
-                    {!m.contabilizado && (
-                      <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mt-1 flex-shrink-0" />
-                    )}
+                    {!m.contabilizado && <input type="checkbox" checked={seleccionados.has(m.id)} onChange={() => toggleSeleccion(m.id)} className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 mt-1 flex-shrink-0" />}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-gray-900 truncate">{m.descripcion}</p>
                       <p className="text-xs text-gray-500 mt-0.5">{m.fecha}</p>
@@ -756,7 +845,6 @@ export default function ConciliacionClient({
                       <p className={`font-mono font-semibold text-sm ${m.cargo_abono === "A" ? "text-emerald-600" : "text-red-500"}`}>
                         {m.cargo_abono === "A" ? "+" : "-"}{formatMonto(Math.abs(m.monto))}
                       </p>
-                      <p className="text-[11px] text-gray-400 font-mono">Saldo: {formatMonto(m.saldo)}</p>
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
@@ -769,13 +857,9 @@ export default function ConciliacionClient({
                         : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Pendiente</span>}
                     </div>
                     {!m.contabilizado ? (
-                      <button onClick={() => abrirContabilizar(m)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">
-                        Contabilizar
-                      </button>
+                      <button onClick={() => abrirContabilizar(m)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">Contabilizar</button>
                     ) : (
-                      <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100">
-                        Anular
-                      </button>
+                      <button onClick={() => ejecutarAnulacion(m.id)} disabled={isPending} className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100">Anular</button>
                     )}
                   </div>
                 </div>
@@ -801,12 +885,11 @@ export default function ConciliacionClient({
             <h3 className="text-base sm:text-lg font-semibold text-gray-900">Contabilizar movimiento</h3>
           </div>
 
-          {/* Info movimiento */}
           <div className={`p-3 sm:p-4 rounded-xl border-l-4 ${movActivo.cargo_abono === "A" ? "border-l-emerald-500 bg-emerald-50" : "border-l-red-500 bg-red-50"}`}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-sm text-gray-900 font-medium truncate">{movActivo.descripcion}</p>
-                <p className="text-xs text-gray-500 mt-0.5">{movActivo.fecha} · {movActivo.cargo_abono === "A" ? "ABONO" : "CARGO"}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{movActivo.fecha} · {movActivo.cargo_abono === "A" ? "ABONO" : "CARGO"} · {bancoInfo.nombre}</p>
               </div>
               <p className={`font-mono font-bold text-lg sm:text-xl flex-shrink-0 ${movActivo.cargo_abono === "A" ? "text-emerald-700" : "text-red-700"}`}>
                 {movActivo.cargo_abono === "A" ? "+" : "-"}${Math.abs(movActivo.monto).toLocaleString("es-CL")}
@@ -814,16 +897,12 @@ export default function ConciliacionClient({
             </div>
           </div>
 
-          {/* Tipo contabilización */}
           <div>
             <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Tipo</label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(["COBRANZA", "PAGO", "GASTO", "INGRESO"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => { setFormTipo(t); setFormCuenta(""); setFormAuxiliar(""); setDocsPend([]); }}
-                  className={`py-2 px-3 rounded-lg text-xs sm:text-sm font-medium border transition-colors ${formTipo === t ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-700 border-gray-200 hover:border-gray-400"}`}
-                >
+                <button key={t} onClick={() => { setFormTipo(t); setFormCuenta(""); setFormAuxiliar(""); setDocsPend([]); }}
+                  className={`py-2 px-3 rounded-lg text-xs sm:text-sm font-medium border transition-colors ${formTipo === t ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-gray-700 border-gray-200 hover:border-gray-400"}`}>
                   {t}
                 </button>
               ))}
@@ -840,16 +919,10 @@ export default function ConciliacionClient({
                 ))}
               </select>
             </div>
-
             <div className="relative">
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Auxiliar (RUT)</label>
-              <input
-                type="text"
-                value={busqAux}
-                onChange={(e) => { setBusqAux(e.target.value); setFormAuxiliar(e.target.value); }}
-                placeholder="Buscar por RUT o nombre..."
-                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
-              />
+              <input type="text" value={busqAux} onChange={(e) => { setBusqAux(e.target.value); setFormAuxiliar(e.target.value); }}
+                placeholder="Buscar por RUT o nombre..." className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
               {busqAux && auxFiltrados.length > 0 && (
                 <div className="absolute z-10 w-full border border-gray-200 rounded-lg mt-1 max-h-40 overflow-y-auto text-sm bg-white shadow-lg">
                   {auxFiltrados.map((a) => (
@@ -877,7 +950,6 @@ export default function ConciliacionClient({
             </div>
           </div>
 
-          {/* Docs pendientes */}
           {formCuenta && formAuxiliar && (
             <div>
               <button onClick={buscarDocs} disabled={isPending} className="text-indigo-600 hover:text-indigo-800 text-sm font-medium mb-2 flex items-center gap-1">
@@ -888,11 +960,8 @@ export default function ConciliacionClient({
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   <div className="divide-y divide-gray-100">
                     {docsPend.map((d) => (
-                      <button
-                        key={`${d.tipo_doc}-${d.num_doc}`}
-                        onClick={() => { setFormTipoDoc(d.tipo_doc); setFormNumDoc(d.num_doc); setFormReferencia(`${d.tipo_doc}|${d.num_doc}`); }}
-                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-indigo-50 transition-colors text-sm"
-                      >
+                      <button key={`${d.tipo_doc}-${d.num_doc}`} onClick={() => { setFormTipoDoc(d.tipo_doc); setFormNumDoc(d.num_doc); setFormReferencia(`${d.tipo_doc}|${d.num_doc}`); }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-indigo-50 transition-colors text-sm">
                         <span><span className="font-medium">{d.tipo_doc}</span> <span className="font-mono text-gray-500">{d.num_doc}</span></span>
                         <span className="font-mono font-medium text-gray-900">{formatMonto(d.saldo)}</span>
                       </button>
@@ -912,19 +981,14 @@ export default function ConciliacionClient({
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Categoría flujo</label>
               <select value={formCategoria} onChange={(e) => setFormCategoria(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
                 <option value="">Seleccionar...</option>
-                {categoriasFlujo.map((c) => (
-                  <option key={c.id} value={c.codigo}>{c.nombre}</option>
-                ))}
+                {categoriasFlujo.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
               </select>
             </div>
           </div>
 
           <div className="flex justify-end pt-2">
-            <button
-              onClick={ejecutarContab}
-              disabled={isPending || !formCuenta}
-              className="w-full sm:w-auto bg-indigo-600 text-white px-8 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 shadow-sm transition-colors"
-            >
+            <button onClick={ejecutarContab} disabled={isPending || !formCuenta}
+              className="w-full sm:w-auto bg-indigo-600 text-white px-8 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 shadow-sm transition-colors">
               {isPending ? "Procesando..." : "Contabilizar"}
             </button>
           </div>

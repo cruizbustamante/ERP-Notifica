@@ -7,7 +7,9 @@ import {
   getTransacciones,
   marcarPagado,
   anularTransaccion,
+  getRentabilidadPorPlataforma,
   type TransaccionInput,
+  type RentabilidadPlataforma,
 } from "./actions";
 
 type Transaccion = {
@@ -22,6 +24,8 @@ type Transaccion = {
   comision_nl_neta: number;
   iva_comision: number;
   costo_tbk: number;
+  costo_plataforma: number;
+  plataforma: string;
   estado: string;
   fecha_pago: string | null;
   referencia_pago: string | null;
@@ -49,6 +53,17 @@ export default function MarketplaceClient({
   const [isPending, startTransition] = useTransition();
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [showPagoModal, setShowPagoModal] = useState(false);
+  const [showRentabilidad, setShowRentabilidad] = useState(false);
+  const [rentabilidad, setRentabilidad] = useState<RentabilidadPlataforma[]>([]);
+  const [loadingRent, setLoadingRent] = useState(false);
+
+  const abrirRentabilidad = async () => {
+    setLoadingRent(true);
+    setShowRentabilidad(true);
+    const res = await getRentabilidadPorPlataforma();
+    if (!res.error) setRentabilidad(res.data);
+    setLoadingRent(false);
+  };
 
   // KPIs
   const pendientes = transacciones.filter((t) => t.estado === "PENDIENTE");
@@ -108,20 +123,29 @@ export default function MarketplaceClient({
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Marketplace</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Control de pagos a receptores Transbank</p>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Marketplace</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Control de pagos a receptores</p>
+          </div>
+          <button
+            onClick={abrirRentabilidad}
+            className="w-full sm:w-auto px-3 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 shadow-sm flex items-center justify-center gap-1.5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            Rentabilidad por plataforma
+          </button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex gap-2 mt-3 overflow-x-auto">
           {(["resumen", "transacciones", "carga"] as const).map((v) => (
             <button
               key={v}
               onClick={() => setVista(v)}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition whitespace-nowrap ${
                 vista === v
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
               }`}
             >
               {v === "resumen" ? "Resumen" : v === "transacciones" ? "Transacciones" : "Cargar datos"}
@@ -319,6 +343,118 @@ export default function MarketplaceClient({
 
       {/* Vista: Carga */}
       {vista === "carga" && <CargaPanel onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); setVista("transacciones"); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />}
+
+      {/* Modal rentabilidad */}
+      {showRentabilidad && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white z-10 p-4 sm:p-6 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-gray-900">Rentabilidad por plataforma</h3>
+                <p className="text-xs sm:text-sm text-gray-500 mt-0.5">Comision NL vs costo plataforma</p>
+              </div>
+              <button onClick={() => setShowRentabilidad(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {loadingRent ? (
+              <div className="p-12 text-center">
+                <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto"></div>
+                <p className="text-sm text-gray-500 mt-3">Calculando...</p>
+              </div>
+            ) : rentabilidad.length === 0 ? (
+              <div className="p-12 text-center text-gray-400">Sin datos de transacciones</div>
+            ) : (
+              <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+                {/* Resumen consolidado */}
+                {(() => {
+                  const total = rentabilidad.reduce((acc, r) => ({
+                    monto_bruto: acc.monto_bruto + r.monto_bruto,
+                    comision_nl_neta: acc.comision_nl_neta + r.comision_nl_neta,
+                    costo_plataforma: acc.costo_plataforma + r.costo_plataforma,
+                    rentabilidad_neta: acc.rentabilidad_neta + r.rentabilidad_neta,
+                    transacciones: acc.transacciones + r.transacciones,
+                  }), { monto_bruto: 0, comision_nl_neta: 0, costo_plataforma: 0, rentabilidad_neta: 0, transacciones: 0 });
+
+                  return (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+                      <div className="bg-gray-50 rounded-xl p-3 sm:p-4">
+                        <p className="text-[10px] sm:text-[11px] text-gray-500 uppercase font-medium">Total transado</p>
+                        <p className="text-base sm:text-xl font-bold text-gray-900 mt-1">${formatMonto(total.monto_bruto)}</p>
+                        <p className="text-[11px] text-gray-400">{total.transacciones} trx</p>
+                      </div>
+                      <div className="bg-indigo-50 rounded-xl p-3 sm:p-4">
+                        <p className="text-[10px] sm:text-[11px] text-indigo-600 uppercase font-medium">Comision NL</p>
+                        <p className="text-base sm:text-xl font-bold text-indigo-700 mt-1">${formatMonto(total.comision_nl_neta)}</p>
+                      </div>
+                      <div className="bg-red-50 rounded-xl p-3 sm:p-4">
+                        <p className="text-[10px] sm:text-[11px] text-red-600 uppercase font-medium">Costo plataf.</p>
+                        <p className="text-base sm:text-xl font-bold text-red-700 mt-1">${formatMonto(total.costo_plataforma)}</p>
+                      </div>
+                      <div className={`rounded-xl p-3 sm:p-4 ${total.rentabilidad_neta >= 0 ? "bg-green-50" : "bg-red-50"}`}>
+                        <p className={`text-[10px] sm:text-[11px] uppercase font-medium ${total.rentabilidad_neta >= 0 ? "text-green-600" : "text-red-600"}`}>Rent. neta</p>
+                        <p className={`text-base sm:text-xl font-bold mt-1 ${total.rentabilidad_neta >= 0 ? "text-green-700" : "text-red-700"}`}>${formatMonto(total.rentabilidad_neta)}</p>
+                        <p className="text-[11px] text-gray-400">{total.monto_bruto > 0 ? ((total.rentabilidad_neta / total.monto_bruto) * 100).toFixed(2) : 0}%</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Detalle por plataforma */}
+                {rentabilidad.map((r) => {
+                  const platLabel: Record<string, string> = { TBK: "Transbank", MP: "Mercado Pago" };
+                  const platColor: Record<string, { bg: string; border: string; header: string }> = {
+                    TBK: { bg: "bg-orange-50", border: "border-orange-200", header: "bg-orange-100" },
+                    MP: { bg: "bg-sky-50", border: "border-sky-200", header: "bg-sky-100" },
+                  };
+                  const c = platColor[r.plataforma] || platColor.TBK;
+
+                  return (
+                    <div key={r.plataforma} className={`rounded-xl border ${c.border} overflow-hidden`}>
+                      <div className={`${c.header} px-4 sm:px-5 py-2.5 sm:py-3 flex items-center justify-between`}>
+                        <h4 className="font-semibold text-gray-900 text-sm sm:text-base">{platLabel[r.plataforma] || r.plataforma}</h4>
+                        <span className="text-[11px] sm:text-xs text-gray-500">{r.transacciones} trx</span>
+                      </div>
+                      <div className={`${c.bg} p-3 sm:p-5`}>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-y-4 sm:gap-x-6 text-sm">
+                          <div>
+                            <p className="text-[11px] text-gray-500">Monto bruto</p>
+                            <p className="font-mono font-bold text-gray-900 text-sm">${formatMonto(r.monto_bruto)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-gray-500">Comision NL bruta</p>
+                            <p className="font-mono font-bold text-indigo-700 text-sm">${formatMonto(r.comision_nl_bruta)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-gray-500">IVA comision</p>
+                            <p className="font-mono text-gray-600 text-sm">${formatMonto(r.iva_comision)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-gray-500">Comision NL neta</p>
+                            <p className="font-mono font-bold text-indigo-700 text-sm">${formatMonto(r.comision_nl_neta)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] text-gray-500">Costo {platLabel[r.plataforma] || r.plataforma}</p>
+                            <p className="font-mono font-bold text-red-600 text-sm">-${formatMonto(r.costo_plataforma)}</p>
+                          </div>
+                          <div className={`p-2 rounded-lg ${r.rentabilidad_neta >= 0 ? "bg-green-100" : "bg-red-100"}`}>
+                            <p className="text-[11px] text-gray-500">Rentabilidad neta</p>
+                            <p className={`font-mono font-bold text-base sm:text-lg ${r.rentabilidad_neta >= 0 ? "text-green-700" : "text-red-700"}`}>
+                              ${formatMonto(r.rentabilidad_neta)}
+                            </p>
+                            <p className="text-[11px] text-gray-500">Margen: {r.margen_pct.toFixed(2)}%</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal pago */}
       {showPagoModal && (

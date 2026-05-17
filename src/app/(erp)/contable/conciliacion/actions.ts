@@ -14,13 +14,17 @@ async function getConfig() {
 
 // ─── Resumen cartola ────────────────────────────────────────────────────
 
-export async function getResumenCartola(anio: number) {
+export async function getResumenCartola(anio: number, banco?: string) {
   const supabase = await createClient();
 
-  const { data } = await supabase
+  let query = supabase
     .from("cartolas")
     .select("mes, monto, tipo, contabilizado, cargo_abono")
     .eq("anio", anio);
+
+  if (banco) query = query.eq("cuenta_banco", banco);
+
+  const { data } = await query;
 
   type MesData = { abonos: number; cargos: number; pend: number; cont: number };
   const porMes: Record<number, MesData> = {};
@@ -79,7 +83,7 @@ function extraerNombre(descripcion: string): string {
   return "";
 }
 
-export async function getMovimientosCartola(anio: number, mes: number, soloNoCont = false) {
+export async function getMovimientosCartola(anio: number, mes: number, soloNoCont = false, banco?: string) {
   const supabase = await createClient();
 
   let query = supabase
@@ -89,6 +93,7 @@ export async function getMovimientosCartola(anio: number, mes: number, soloNoCon
     .eq("mes", mes)
     .order("fecha", { ascending: false });
 
+  if (banco) query = query.eq("cuenta_banco", banco);
   if (soloNoCont) {
     query = query.eq("contabilizado", false);
   }
@@ -133,7 +138,6 @@ export type ContabilizarInput = {
 export async function contabilizarMovimiento(input: ContabilizarInput) {
   const supabase = await createClient();
   const config = await getConfig();
-  const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
 
   // Leer movimiento
   const { data: mov } = await supabase
@@ -144,6 +148,10 @@ export async function contabilizarMovimiento(input: ContabilizarInput) {
 
   if (!mov) return { error: "Movimiento no encontrado" };
   if (mov.contabilizado) return { error: "Ya está contabilizado" };
+
+  const ctaBanco = mov.cuenta_banco === "CTE-MP"
+    ? (config.CUENTA_BANCO_MP || "1-1-01-003")
+    : (config.CUENTA_BANCO || "1-1-01-002");
 
   const monto = Math.abs(Number(mov.monto) || 0);
   const esAbono = (mov.cargo_abono === "A" || mov.tipo === "ABONO");
@@ -259,6 +267,33 @@ export async function anularContabilizacion(cartolaId: number) {
   return { error: null };
 }
 
+// ─── Bancos disponibles ────────────────────────────────────────────────
+
+export type BancoInfo = {
+  id: string;
+  nombre: string;
+  cuenta: string;
+  cuentaContable: string;
+};
+
+export async function getBancos(): Promise<BancoInfo[]> {
+  const config = await getConfig();
+  return [
+    {
+      id: "CTE-SANTANDER",
+      nombre: config.BANCO_NOMBRE || "Santander",
+      cuenta: config.BANCO_CTA || "",
+      cuentaContable: config.CUENTA_BANCO || "1-1-01-002",
+    },
+    {
+      id: "CTE-MP",
+      nombre: config.BANCO_NOMBRE_MP || "Mercado Pago",
+      cuenta: config.BANCO_CTA_MP || "",
+      cuentaContable: config.CUENTA_BANCO_MP || "1-1-01-003",
+    },
+  ];
+}
+
 // ─── Cargar cartola desde Excel ─────────────────────────────────────────
 
 export async function cargarCartolaSantander(movimientos: Array<{
@@ -304,6 +339,68 @@ export async function cargarCartolaSantander(movimientos: Array<{
   });
 
   // Insert in batches of 50
+  for (let i = 0; i < records.length; i += 50) {
+    const batch = records.slice(i, i + 50);
+    const { data, error } = await supabase
+      .from("cartolas")
+      .upsert(batch, { onConflict: "huella", ignoreDuplicates: true })
+      .select("id");
+
+    if (error) {
+      errores.push(`Lote ${Math.floor(i / 50) + 1}: ${error.message}`);
+    } else {
+      nuevos += data?.length || 0;
+    }
+    duplicados += batch.length - (data?.length || 0);
+  }
+
+  revalidatePath("/contable/conciliacion");
+  revalidatePath("/inicio");
+  return { nuevos, duplicados, errores };
+}
+
+// ─── Cargar cartola Mercado Pago ────────────────────────────────────────
+
+export async function cargarCartolaMP(movimientos: Array<{
+  op_id: string;
+  tipo_pago: string;
+  tipo_operacion: string;
+  valor_compra: number;
+  fecha: string;
+  comisiones: number;
+  monto_neto: number;
+}>) {
+  const supabase = await createClient();
+  let nuevos = 0;
+  let duplicados = 0;
+  const errores: string[] = [];
+
+  const { createHash } = await import("crypto");
+
+  const records = movimientos.map((m) => {
+    const huellaStr = `${m.op_id}|${m.tipo_operacion}|${m.monto_neto}`;
+    const huella = createHash("md5").update(huellaStr).digest("hex");
+    const [year, month] = m.fecha.split("-").map(Number);
+    const montoNeto = Number(m.monto_neto);
+    const esAbono = montoNeto > 0;
+
+    return {
+      cuenta_banco: "CTE-MP",
+      fecha: m.fecha,
+      descripcion: `${m.tipo_operacion} · ${m.tipo_pago} · OP ${m.op_id}`,
+      monto: Math.abs(montoNeto),
+      saldo: 0,
+      num_doc: m.op_id,
+      sucursal: "",
+      cargo_abono: esAbono ? "A" : "C",
+      huella,
+      anio: year,
+      mes: month,
+      contabilizado: false,
+      estado_conciliacion: "PENDIENTE",
+    };
+  });
+
   for (let i = 0; i < records.length; i += 50) {
     const batch = records.slice(i, i + 50);
     const { data, error } = await supabase
@@ -397,10 +494,9 @@ function extraerRUTDeDescripcion(desc: string): string {
   return "";
 }
 
-export async function matchAutomatico(anio: number, mes: number): Promise<MatchResult> {
+export async function matchAutomatico(anio: number, mes: number, banco?: string): Promise<MatchResult> {
   const supabase = await createClient();
   const config = await getConfig();
-  const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
   const ctaClientes = config.CUENTA_CLIENTES || "1-1-03-001";
   const ctaClientesBol = config.CUENTA_CLIENTES_BOLETAS || "1-1-03-002";
   const ctaProveedores = config.CUENTA_PROVEEDORES || "2-1-02-001";
@@ -411,12 +507,16 @@ export async function matchAutomatico(anio: number, mes: number): Promise<MatchR
   const todasCuentasDoc = [...cuentasCXC, ...cuentasCXP];
 
   // 1. Get pending cartola movements
-  const { data: cartolaRows } = await supabase
+  let cartolaQuery = supabase
     .from("cartolas")
-    .select("id, fecha, monto, cargo_abono, descripcion, num_doc")
+    .select("id, fecha, monto, cargo_abono, descripcion, num_doc, cuenta_banco")
     .eq("anio", anio)
     .eq("mes", mes)
     .eq("contabilizado", false);
+
+  if (banco) cartolaQuery = cartolaQuery.eq("cuenta_banco", banco);
+
+  const { data: cartolaRows } = await cartolaQuery;
 
   if (!cartolaRows || cartolaRows.length === 0) {
     return { matched: 0, details: [], error: null };
@@ -425,7 +525,7 @@ export async function matchAutomatico(anio: number, mes: number): Promise<MatchR
   // 2. Extract RUTs from descriptions
   type PendienteMov = {
     id: number; fecha: string; monto: number; esAbono: boolean;
-    descripcion: string; rut: string;
+    descripcion: string; rut: string; cuenta_banco: string;
   };
 
   const pendientes: PendienteMov[] = [];
@@ -442,6 +542,7 @@ export async function matchAutomatico(anio: number, mes: number): Promise<MatchR
       esAbono: row.cargo_abono === "A",
       descripcion: row.descripcion || "",
       rut,
+      cuenta_banco: row.cuenta_banco || "CTE-SANTANDER",
     });
   }
 
@@ -573,9 +674,13 @@ export async function matchAutomatico(anio: number, mes: number): Promise<MatchR
 
       const lineas: Linea[] = [];
 
-      // Bank line
+      // Bank line — cuenta contable según banco del movimiento
+      const ctaBancoMov = mov.cuenta_banco === "CTE-MP"
+        ? (config.CUENTA_BANCO_MP || "1-1-01-003")
+        : (config.CUENTA_BANCO || "1-1-01-002");
+
       lineas.push({
-        cuenta_codigo: ctaBanco,
+        cuenta_codigo: ctaBancoMov,
         debe: mov.esAbono ? mov.monto : 0,
         haber: mov.esAbono ? 0 : mov.monto,
         glosa,

@@ -1,10 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import DashboardClient from "./DashboardClient";
+import { getBancos } from "../../contable/conciliacion/actions";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
   const anio = new Date().getFullYear();
   const mes = new Date().getMonth() + 1;
+  const bancos = await getBancos();
 
   const [
     { data: movs },
@@ -12,6 +14,7 @@ export default async function DashboardPage() {
     { data: comprasSii },
     { data: cartola },
     { data: cuentas },
+    { data: allCartolas },
   ] = await Promise.all([
     supabase
       .from("mov_contables")
@@ -28,19 +31,21 @@ export default async function DashboardPage() {
       .eq("anio", anio),
     supabase
       .from("cartolas")
-      .select("mes, monto, tipo, cargo_abono, contabilizado")
+      .select("mes, monto, tipo, cargo_abono, contabilizado, cuenta_banco")
       .eq("anio", anio),
     supabase
       .from("plan_cuentas")
       .select("codigo, nombre, tipo")
       .eq("nivel", 4)
       .eq("estado", "S"),
+    supabase
+      .from("cartolas")
+      .select("monto, cargo_abono, cuenta_banco"),
   ]);
 
   const cuentaTipoMap: Record<string, string> = {};
   for (const c of cuentas || []) cuentaTipoMap[c.codigo] = c.tipo;
 
-  // Calcular ingresos y gastos por mes
   const ingresosPorMes: number[] = Array(12).fill(0);
   const gastosPorMes: number[] = Array(12).fill(0);
 
@@ -53,7 +58,6 @@ export default async function DashboardPage() {
     if (tipo === "G") gastosPorMes[comp.mes - 1] += debe - haber;
   }
 
-  // Ventas SII por mes
   const ventasPorMes: number[] = Array(12).fill(0);
   const noCentralizadosVentas = { cant: 0, monto: 0 };
   for (const v of ventasSii || []) {
@@ -68,7 +72,6 @@ export default async function DashboardPage() {
     }
   }
 
-  // Compras SII
   const noCentralizadosCompras = { cant: 0, monto: 0 };
   for (const c of comprasSii || []) {
     if (!c.centralizado) {
@@ -79,16 +82,41 @@ export default async function DashboardPage() {
     }
   }
 
-  // Cartola pendiente
   const cartolaPend = { cant: 0, abonos: 0, cargos: 0 };
   for (const c of cartola || []) {
     if (!c.contabilizado) {
       cartolaPend.cant++;
       const monto = Math.abs(Number(c.monto) || 0);
-      if (c.tipo === "ABONO" || c.cargo_abono === "ABONO") cartolaPend.abonos += monto;
+      if (c.tipo === "ABONO" || c.cargo_abono === "A") cartolaPend.abonos += monto;
       else cartolaPend.cargos += monto;
     }
   }
+
+  // Saldos por banco
+  const saldoMap: Record<string, { saldo: number; pendientes: number }> = {};
+  for (const b of bancos) saldoMap[b.id] = { saldo: 0, pendientes: 0 };
+
+  for (const c of allCartolas || []) {
+    const banco = c.cuenta_banco || "CTE-SANTANDER";
+    if (!saldoMap[banco]) saldoMap[banco] = { saldo: 0, pendientes: 0 };
+    const monto = Math.abs(Number(c.monto));
+    saldoMap[banco].saldo += c.cargo_abono === "A" ? monto : -monto;
+  }
+
+  for (const c of cartola || []) {
+    if (!c.contabilizado) {
+      const banco = c.cuenta_banco || "CTE-SANTANDER";
+      if (saldoMap[banco]) saldoMap[banco].pendientes++;
+    }
+  }
+
+  const saldosBanco = bancos.map((b) => ({
+    nombre: b.nombre,
+    saldo: saldoMap[b.id]?.saldo || 0,
+    pendientes: saldoMap[b.id]?.pendientes || 0,
+  }));
+
+  const saldoConsolidado = saldosBanco.reduce((s, b) => s + b.saldo, 0);
 
   const totalIngresos = ingresosPorMes.reduce((a, b) => a + b, 0);
   const totalGastos = gastosPorMes.reduce((a, b) => a + b, 0);
@@ -107,6 +135,8 @@ export default async function DashboardPage() {
       noCentralizadosVentas={noCentralizadosVentas}
       noCentralizadosCompras={noCentralizadosCompras}
       cartolaPend={cartolaPend}
+      saldosBanco={saldosBanco}
+      saldoConsolidado={saldoConsolidado}
     />
   );
 }

@@ -2,6 +2,8 @@
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 
+type SaldoBanco = { nombre: string; saldo: number; pendientes: number };
+
 type Props = {
   anio: number;
   mes: number;
@@ -14,6 +16,8 @@ type Props = {
   noCentralizadosVentas: { cant: number; monto: number };
   noCentralizadosCompras: { cant: number; monto: number };
   cartolaPend: { cant: number; abonos: number; cargos: number };
+  saldosBanco: SaldoBanco[];
+  saldoConsolidado: number;
 };
 
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
@@ -54,6 +58,22 @@ export default function DashboardClient(props: Props) {
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard Ejecutivo</h1>
         <p className="text-gray-500 mt-1">Indicadores clave — {props.anio}</p>
+      </div>
+
+      {/* Saldos bancarios */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 col-span-2 lg:col-span-1">
+          <p className="text-sm text-gray-500">Saldo consolidado</p>
+          <p className="text-2xl font-bold font-mono mt-1 text-gray-900">{formatMonto(props.saldoConsolidado)}</p>
+          <p className="text-xs text-gray-400 mt-1">{props.saldosBanco.length} cuentas</p>
+        </div>
+        {props.saldosBanco.map((b) => (
+          <div key={b.nombre} className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <p className="text-sm text-gray-500">{b.nombre}</p>
+            <p className="text-2xl font-bold font-mono mt-1 text-gray-900">{formatMonto(b.saldo)}</p>
+            {b.pendientes > 0 && <p className="text-xs text-amber-600 mt-1">{b.pendientes} mov. pendientes</p>}
+          </div>
+        ))}
       </div>
 
       {/* KPIs */}

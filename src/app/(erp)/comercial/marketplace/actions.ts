@@ -18,6 +18,8 @@ export type TransaccionRow = {
   comision_nl_neta: number;
   iva_comision: number;
   costo_tbk: number;
+  costo_plataforma: number;
+  plataforma: string;
   estado: string;
   fecha_pago: string | null;
   referencia_pago: string | null;
@@ -32,6 +34,8 @@ export type TransaccionInput = {
   receptor_nombre: string;
   monto_bruto: number;
   costo_tbk?: number;
+  costo_plataforma?: number;
+  plataforma?: string;
 };
 
 function calcularDesglose(monto: number) {
@@ -59,6 +63,8 @@ export async function cargarTransacciones(transacciones: TransaccionInput[]) {
       comision_nl_neta: desglose.comision_nl_neta,
       iva_comision: desglose.iva_comision,
       costo_tbk: t.costo_tbk || 0,
+      costo_plataforma: t.costo_plataforma || t.costo_tbk || 0,
+      plataforma: t.plataforma || "TBK",
       lote_carga: lote,
     };
   });
@@ -162,6 +168,61 @@ export async function getResumenReceptores() {
     r.total_por_pagar += Number(t.base_receptor);
     if (t.estado === "PAGADO") r.pagado += Number(t.base_receptor);
     else r.pendiente += Number(t.base_receptor);
+  }
+
+  return { data: Object.values(mapa), error: null };
+}
+
+export type RentabilidadPlataforma = {
+  plataforma: string;
+  transacciones: number;
+  monto_bruto: number;
+  comision_nl_bruta: number;
+  comision_nl_neta: number;
+  iva_comision: number;
+  costo_plataforma: number;
+  rentabilidad_neta: number;
+  margen_pct: number;
+};
+
+export async function getRentabilidadPorPlataforma(): Promise<{ data: RentabilidadPlataforma[]; error: string | null }> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("marketplace_transacciones")
+    .select("plataforma, monto_bruto, comision_nl_bruta, comision_nl_neta, iva_comision, costo_plataforma, costo_tbk, estado");
+
+  if (error) return { data: [], error: error.message };
+
+  const mapa: Record<string, RentabilidadPlataforma> = {};
+
+  for (const t of data || []) {
+    if (t.estado === "ANULADO") continue;
+    const plat = t.plataforma || "TBK";
+    if (!mapa[plat]) {
+      mapa[plat] = {
+        plataforma: plat,
+        transacciones: 0,
+        monto_bruto: 0,
+        comision_nl_bruta: 0,
+        comision_nl_neta: 0,
+        iva_comision: 0,
+        costo_plataforma: 0,
+        rentabilidad_neta: 0,
+        margen_pct: 0,
+      };
+    }
+    const r = mapa[plat];
+    r.transacciones++;
+    r.monto_bruto += Number(t.monto_bruto) || 0;
+    r.comision_nl_bruta += Number(t.comision_nl_bruta) || 0;
+    r.comision_nl_neta += Number(t.comision_nl_neta) || 0;
+    r.iva_comision += Number(t.iva_comision) || 0;
+    r.costo_plataforma += Number(t.costo_plataforma) || Number(t.costo_tbk) || 0;
+  }
+
+  for (const r of Object.values(mapa)) {
+    r.rentabilidad_neta = r.comision_nl_neta - r.costo_plataforma;
+    r.margen_pct = r.monto_bruto > 0 ? (r.rentabilidad_neta / r.monto_bruto) * 100 : 0;
   }
 
   return { data: Object.values(mapa), error: null };
