@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createServiceClient } from "@supabase/supabase-js";
 
 export type Rol = "admin" | "contador" | "comercial" | "consulta";
 
@@ -24,7 +25,12 @@ export async function getUsuarioActual(): Promise<UsuarioActual | null> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: role } = await supabase
+  const admin = createServiceClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  const { data: role } = await admin
     .from("user_roles")
     .select("nombre, rol, activo, email")
     .eq("user_id", user.id)

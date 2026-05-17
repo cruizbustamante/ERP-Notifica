@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import LayoutShell from "@/components/LayoutShell";
 
@@ -14,15 +15,16 @@ export default async function ErpLayout({
 
   if (!user) redirect("/login");
 
-  const { data: userRole, error: roleError } = await supabase
+  const admin = createServiceClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  const { data: userRole } = await admin
     .from("user_roles")
     .select("rol, nombre, email")
     .eq("user_id", user.id)
     .single();
-
-  if (roleError) {
-    console.error("Error fetching user role:", roleError.message, "user_id:", user.id);
-  }
 
   const userData = userRole || {
     email: user.email || "",
