@@ -14,6 +14,7 @@ import {
   cargarExcelCompras,
   cargarExcelHonorarios,
   cargarExcelTransbank,
+  verificarDuplicados,
   upsertRegla,
   deleteRegla,
   type TipoLibro,
@@ -22,6 +23,7 @@ import {
   type DocTransbank,
   type ReglaCentralizacion,
   type LineaPreview,
+  type PreviewCarga,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -62,6 +64,9 @@ export default function CentralizacionClient({
   const [reglas, setReglas] = useState<ReglaCentralizacion[]>(reglasInit);
   const [vistaReglas, setVistaReglas] = useState(false);
   const [reglaForm, setReglaForm] = useState({ rut: "", razon_social: "", cuenta_codigo: "", descripcion: "" });
+
+  // Upload preview modal
+  const [uploadPreview, setUploadPreview] = useState<{ tipo: TipoLibro; preview: PreviewCarga; parsedData: Record<string, unknown>[] } | null>(null);
 
   const fileRefs = { ventas: useRef<HTMLInputElement>(null), compras: useRef<HTMLInputElement>(null), honorarios: useRef<HTMLInputElement>(null), transbank: useRef<HTMLInputElement>(null) };
 
@@ -194,17 +199,42 @@ export default function CentralizacionClient({
 
         if (rows.length === 0) { setMensaje({ tipo: "error", texto: "Archivo vacío o sin datos" }); return; }
 
+        let parsedData: Record<string, unknown>[];
+        if (tipo === "ventas") parsedData = parseSIIVentas(rows);
+        else if (tipo === "compras") parsedData = parseSIICompras(rows);
+        else if (tipo === "honorarios") parsedData = parseSIIHonorarios(rows);
+        else parsedData = parseTransbank(rows);
+
+        if (parsedData.length === 0) { setMensaje({ tipo: "error", texto: "No se encontraron registros válidos en el archivo" }); return; }
+
+        const preview = await verificarDuplicados(tipo, parsedData);
+        setUploadPreview({ tipo, preview, parsedData });
+      } catch (err) {
+        setMensaje({ tipo: "error", texto: `Error parseando archivo: ${err instanceof Error ? err.message : "desconocido"}` });
+      }
+    });
+  };
+
+  const confirmarUpload = () => {
+    if (!uploadPreview) return;
+    const { tipo, parsedData } = uploadPreview;
+    setUploadPreview(null);
+
+    startTransition(async () => {
+      try {
         let result: { nuevos: number; duplicados: number; errores: string[] };
-        if (tipo === "ventas") result = await cargarExcelVentas(parseSIIVentas(rows));
-        else if (tipo === "compras") result = await cargarExcelCompras(parseSIICompras(rows));
-        else if (tipo === "honorarios") result = await cargarExcelHonorarios(parseSIIHonorarios(rows));
-        else result = await cargarExcelTransbank(parseTransbank(rows));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = parsedData as any[];
+        if (tipo === "ventas") result = await cargarExcelVentas(data);
+        else if (tipo === "compras") result = await cargarExcelCompras(data);
+        else if (tipo === "honorarios") result = await cargarExcelHonorarios(data);
+        else result = await cargarExcelTransbank(data);
 
         const tipoLabel = tipo === "ventas" ? "Ventas" : tipo === "compras" ? "Compras" : tipo === "honorarios" ? "Honorarios" : "Transbank";
         setMensaje({ tipo: result.errores.length ? "error" : "ok", texto: `${tipoLabel}: ${result.nuevos} nuevos, ${result.duplicados} duplicados${result.errores.length ? ". " + result.errores.join("; ") : ""}` });
         cargarResumen();
       } catch (err) {
-        setMensaje({ tipo: "error", texto: `Error parseando archivo: ${err instanceof Error ? err.message : "desconocido"}` });
+        setMensaje({ tipo: "error", texto: `Error cargando: ${err instanceof Error ? err.message : "desconocido"}` });
       }
     });
   };
@@ -270,6 +300,119 @@ export default function CentralizacionClient({
         <div className={`p-4 rounded-lg text-sm ${mensaje.tipo === "ok" ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
           {mensaje.texto}
           <button onClick={() => setMensaje(null)} className="float-right font-bold">×</button>
+        </div>
+      )}
+
+      {/* ─── Modal Preview Carga Excel ───────────────────────────────────── */}
+      {uploadPreview && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+            <div className="p-5 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">
+                  Carga {uploadPreview.tipo === "ventas" ? "Ventas" : uploadPreview.tipo === "compras" ? "Compras" : uploadPreview.tipo === "honorarios" ? "Honorarios" : "Transbank"}
+                </h2>
+                <button onClick={() => setUploadPreview(null)} className="text-gray-400 hover:text-gray-600 text-xl font-bold">×</button>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">{uploadPreview.parsedData.length} registros encontrados en el archivo</p>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                  <div className="text-2xl font-bold text-green-700">{uploadPreview.preview.totalNuevos}</div>
+                  <div className="text-xs text-green-600 font-medium">Nuevos a registrar</div>
+                  <div className="text-sm font-mono text-green-700 mt-1">{formatMonto(uploadPreview.preview.montoNuevos)}</div>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                  <div className="text-2xl font-bold text-amber-700">{uploadPreview.preview.totalDuplicados}</div>
+                  <div className="text-xs text-amber-600 font-medium">Duplicados (se omiten)</div>
+                  <div className="text-sm font-mono text-amber-700 mt-1">{formatMonto(uploadPreview.preview.montoDuplicados)}</div>
+                </div>
+              </div>
+
+              {/* Distribución por mes */}
+              {Object.keys(uploadPreview.preview.resumenMeses).length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Nuevos por mes</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(uploadPreview.preview.resumenMeses)
+                      .sort(([a], [b]) => Number(a) - Number(b))
+                      .map(([mes, cant]) => (
+                        <span key={mes} className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium border border-blue-200">
+                          {MESES[Number(mes)]}: <span className="font-bold">{cant}</span>
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Lista nuevos (primeros 10) */}
+              {uploadPreview.preview.totalNuevos > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-green-700 mb-2">Nuevos registros {uploadPreview.preview.totalNuevos > 10 ? `(primeros 10 de ${uploadPreview.preview.totalNuevos})` : ""}</h3>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead><tr className="bg-gray-50 text-gray-500"><th className="px-3 py-1.5 text-left">Folio</th><th className="px-3 py-1.5 text-left">RUT</th><th className="px-3 py-1.5 text-left">Razón Social</th><th className="px-3 py-1.5 text-left">Fecha</th><th className="px-3 py-1.5 text-right">Monto</th></tr></thead>
+                      <tbody>
+                        {uploadPreview.preview.nuevos.slice(0, 10).map((r, i) => (
+                          <tr key={i} className="border-t border-gray-100 hover:bg-green-50/50">
+                            <td className="px-3 py-1.5 font-medium">{r.tipo_dte_nombre ? `${r.tipo_dte_nombre} ${r.folio}` : r.folio}</td>
+                            <td className="px-3 py-1.5 font-mono text-gray-600">{r.rut}</td>
+                            <td className="px-3 py-1.5 text-gray-700 truncate max-w-[150px]">{r.razon_social}</td>
+                            <td className="px-3 py-1.5 text-gray-600">{r.fecha}</td>
+                            <td className="px-3 py-1.5 text-right font-mono">{formatMonto(r.monto)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Lista duplicados (primeros 5) */}
+              {uploadPreview.preview.totalDuplicados > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-amber-700 mb-2">Duplicados {uploadPreview.preview.totalDuplicados > 5 ? `(primeros 5 de ${uploadPreview.preview.totalDuplicados})` : ""}</h3>
+                  <div className="border border-amber-200 rounded-lg overflow-hidden bg-amber-50/30">
+                    <table className="w-full text-xs">
+                      <thead><tr className="bg-amber-50 text-amber-600"><th className="px-3 py-1.5 text-left">Folio</th><th className="px-3 py-1.5 text-left">RUT</th><th className="px-3 py-1.5 text-left">Razón Social</th><th className="px-3 py-1.5 text-right">Monto</th></tr></thead>
+                      <tbody>
+                        {uploadPreview.preview.duplicados.slice(0, 5).map((r, i) => (
+                          <tr key={i} className="border-t border-amber-100">
+                            <td className="px-3 py-1.5 font-medium text-amber-800">{r.tipo_dte_nombre ? `${r.tipo_dte_nombre} ${r.folio}` : r.folio}</td>
+                            <td className="px-3 py-1.5 font-mono text-amber-700">{r.rut}</td>
+                            <td className="px-3 py-1.5 text-amber-700 truncate max-w-[150px]">{r.razon_social}</td>
+                            <td className="px-3 py-1.5 text-right font-mono text-amber-800">{formatMonto(r.monto)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {uploadPreview.preview.totalNuevos === 0 && (
+                <div className="text-center py-6 text-amber-700 bg-amber-50 rounded-xl border border-amber-200">
+                  <span className="text-3xl block mb-2">0</span>
+                  <p className="font-medium">Todos los registros ya existen en el sistema</p>
+                  <p className="text-sm mt-1">No hay nada nuevo que cargar</p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-200 flex justify-end gap-3">
+              <button onClick={() => setUploadPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">
+                Cancelar
+              </button>
+              {uploadPreview.preview.totalNuevos > 0 && (
+                <button onClick={confirmarUpload} disabled={isPending} className="px-6 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+                  {isPending ? "Cargando..." : `Confirmar carga (${uploadPreview.preview.totalNuevos} docs)`}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

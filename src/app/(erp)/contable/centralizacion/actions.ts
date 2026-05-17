@@ -717,6 +717,93 @@ export async function cargarExcelTransbank(registros: Array<{
   return { nuevos, duplicados, errores };
 }
 
+// ─── Verificar duplicados (preview antes de cargar) ────────────────────
+
+export type PreviewCarga = {
+  nuevos: Array<{ folio: string; rut: string; razon_social: string; fecha: string; monto: number; tipo_dte_nombre?: string }>;
+  duplicados: Array<{ folio: string; rut: string; razon_social: string; fecha: string; monto: number; tipo_dte_nombre?: string }>;
+  resumenMeses: Record<number, number>;
+  totalNuevos: number;
+  totalDuplicados: number;
+  montoNuevos: number;
+  montoDuplicados: number;
+};
+
+export async function verificarDuplicados(
+  tipo: "ventas" | "compras" | "honorarios" | "transbank",
+  registros: Array<Record<string, unknown>>
+): Promise<PreviewCarga> {
+  const supabase = await createClient();
+  const { createHash } = await import("crypto");
+
+  const tabla = tipo === "ventas" ? "ventas_sii" : tipo === "compras" ? "compras_sii" : tipo === "honorarios" ? "honorarios_sii" : "transbank_vouchers";
+
+  const huellas: string[] = [];
+  const dataPorHuella: Record<string, { folio: string; rut: string; razon_social: string; fecha: string; monto: number; tipo_dte_nombre?: string; mes: number }> = {};
+
+  for (const r of registros) {
+    let huellaStr = "";
+    let folio = "", rut = "", razon = "", fecha = "", monto = 0, mes = 0, tipoDteNombre = "";
+
+    if (tipo === "ventas") {
+      const rutNorm = normalizeRut(String(r.rut_receptor || ""));
+      huellaStr = `V|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(Number(r.monto_total))}`;
+      folio = String(r.folio); rut = rutNorm; razon = String(r.razon_social || "");
+      fecha = String(r.fecha_emision); monto = Number(r.monto_total); tipoDteNombre = String(r.tipo_dte_nombre || "");
+      const [, m] = fecha.split("-").map(Number); mes = m;
+    } else if (tipo === "compras") {
+      const rutNorm = normalizeRut(String(r.rut_emisor || ""));
+      huellaStr = `C|${r.tipo_dte}|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(Number(r.monto_total))}`;
+      folio = String(r.folio); rut = rutNorm; razon = String(r.razon_social || "");
+      const fechaMes = String(r.fecha_recepcion || r.fecha_emision);
+      fecha = String(r.fecha_emision); monto = Number(r.monto_total); tipoDteNombre = String(r.tipo_dte_nombre || "");
+      const [, m] = fechaMes.split("-").map(Number); mes = m;
+    } else if (tipo === "honorarios") {
+      const rutNorm = normalizeRut(String(r.rut_emisor || ""));
+      huellaStr = `H|${r.folio}|${rutNorm}|${r.fecha_emision}|${Math.round(Number(r.monto_bruto))}`;
+      folio = String(r.folio); rut = rutNorm; razon = String(r.razon_social || "");
+      fecha = String(r.fecha_emision); monto = Number(r.monto_bruto);
+      const [, m] = fecha.split("-").map(Number); mes = m;
+    } else {
+      huellaStr = `TB|${r.numero_operacion}|${r.fecha}|${Math.round(Number(r.monto_bruto))}`;
+      folio = String(r.numero_operacion); rut = ""; razon = String(r.tipo_tarjeta || "");
+      fecha = String(r.fecha); monto = Number(r.monto_bruto);
+      const [, m] = fecha.split("-").map(Number); mes = m;
+    }
+
+    const huella = createHash("md5").update(huellaStr).digest("hex");
+    huellas.push(huella);
+    dataPorHuella[huella] = { folio, rut, razon_social: razon, fecha, monto, tipo_dte_nombre: tipoDteNombre, mes };
+  }
+
+  const existentes = new Set<string>();
+  for (let i = 0; i < huellas.length; i += 100) {
+    const batch = huellas.slice(i, i + 100);
+    const { data } = await supabase.from(tabla).select("huella").in("huella", batch);
+    for (const row of data || []) existentes.add(row.huella);
+  }
+
+  const nuevos: PreviewCarga["nuevos"] = [];
+  const duplicados: PreviewCarga["duplicados"] = [];
+  const resumenMeses: Record<number, number> = {};
+  let montoNuevos = 0, montoDuplicados = 0;
+
+  for (const huella of huellas) {
+    const d = dataPorHuella[huella];
+    const item = { folio: d.folio, rut: d.rut, razon_social: d.razon_social, fecha: d.fecha, monto: d.monto, tipo_dte_nombre: d.tipo_dte_nombre };
+    if (existentes.has(huella)) {
+      duplicados.push(item);
+      montoDuplicados += d.monto;
+    } else {
+      nuevos.push(item);
+      montoNuevos += d.monto;
+      resumenMeses[d.mes] = (resumenMeses[d.mes] || 0) + 1;
+    }
+  }
+
+  return { nuevos, duplicados, resumenMeses, totalNuevos: nuevos.length, totalDuplicados: duplicados.length, montoNuevos, montoDuplicados };
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────
 
 function formatCLP(n: number) { return "$" + Math.round(n).toLocaleString("es-CL"); }
