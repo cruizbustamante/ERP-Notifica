@@ -324,6 +324,216 @@ export async function cargarCartolaSantander(movimientos: Array<{
   return { nuevos, duplicados, errores };
 }
 
+// ─── Match Automático ───────────────────────────────────────────────────
+
+export type MatchResult = {
+  matched: number;
+  details: Array<{
+    cartola_id: number;
+    comprobante_id: number;
+    monto: number;
+    fecha_cartola: string;
+    fecha_comprobante: string;
+    tipo_match: "exacto" | "monto" | "documento";
+  }>;
+  error: string | null;
+};
+
+export async function matchAutomatico(anio: number, mes: number): Promise<MatchResult> {
+  const supabase = await createClient();
+  const config = await getConfig();
+  const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
+
+  // 1. Get pending cartola movements for this month
+  const { data: pendientes } = await supabase
+    .from("cartolas")
+    .select("id, fecha, monto, cargo_abono, descripcion, num_doc")
+    .eq("anio", anio)
+    .eq("mes", mes)
+    .eq("contabilizado", false);
+
+  if (!pendientes || pendientes.length === 0) {
+    return { matched: 0, details: [], error: null };
+  }
+
+  // 2. Get mov_contables on bank account for this month that are NOT linked to any cartola
+  //    These are comprobantes created manually (not via cartola contabilizar)
+  const { data: movsContables } = await supabase
+    .from("mov_contables")
+    .select("comprobante_id, debe, haber, glosa, num_doc, comprobantes!inner(id, fecha, anio, mes, estado)")
+    .eq("cuenta_codigo", ctaBanco)
+    .eq("comprobantes.anio", anio)
+    .eq("comprobantes.mes", mes)
+    .eq("comprobantes.estado", "VIGENTE");
+
+  if (!movsContables || movsContables.length === 0) {
+    return { matched: 0, details: [], error: null };
+  }
+
+  // 3. Find which comprobante IDs are already linked to a cartola
+  const compIds = [...new Set(movsContables.map((m) => m.comprobante_id))];
+  const { data: linkedCartolas } = await supabase
+    .from("cartolas")
+    .select("comprobante_id")
+    .in("comprobante_id", compIds)
+    .eq("contabilizado", true);
+
+  const linkedCompIds = new Set((linkedCartolas || []).map((c) => c.comprobante_id));
+
+  // Filter to only unlinked accounting movements
+  const unlinkedMovs = movsContables.filter((m) => !linkedCompIds.has(m.comprobante_id));
+
+  if (unlinkedMovs.length === 0) {
+    return { matched: 0, details: [], error: null };
+  }
+
+  // 4. Build candidate list from unlinked movements
+  type Candidate = {
+    comprobante_id: number;
+    monto: number;
+    cargo_abono: string;
+    fecha: string;
+    glosa: string;
+    num_doc: string;
+    used: boolean;
+  };
+
+  const candidates: Candidate[] = unlinkedMovs.map((m) => {
+    const comp = m.comprobantes as unknown as { id: number; fecha: string; anio: number; mes: number; estado: string };
+    const debe = Number(m.debe) || 0;
+    const haber = Number(m.haber) || 0;
+    // Bank account: debe = abono (money in), haber = cargo (money out)
+    return {
+      comprobante_id: m.comprobante_id,
+      monto: debe > 0 ? debe : haber,
+      cargo_abono: debe > 0 ? "A" : "C",
+      fecha: comp.fecha,
+      glosa: m.glosa || "",
+      num_doc: m.num_doc || "",
+      used: false,
+    };
+  });
+
+  // 5. Matching algorithm
+  const matches: MatchResult["details"] = [];
+  const usedCartolas = new Set<number>();
+
+  // Helper: date diff in days
+  function daysDiff(d1: string, d2: string): number {
+    const t1 = new Date(d1 + "T12:00:00").getTime();
+    const t2 = new Date(d2 + "T12:00:00").getTime();
+    return Math.abs(t1 - t2) / (1000 * 60 * 60 * 24);
+  }
+
+  // Pass 1: Exact match (same amount + same type + date ±2 days)
+  for (const cart of pendientes) {
+    if (usedCartolas.has(cart.id)) continue;
+    const montoCart = Math.abs(Number(cart.monto));
+    const tipoCart = cart.cargo_abono;
+
+    // Find candidates with exact amount, same type, closest date within 2 days
+    const exactCandidates = candidates
+      .filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart && daysDiff(cart.fecha || "", c.fecha) <= 2)
+      .sort((a, b) => daysDiff(cart.fecha || "", a.fecha) - daysDiff(cart.fecha || "", b.fecha));
+
+    if (exactCandidates.length === 1 || (exactCandidates.length > 0 && daysDiff(cart.fecha || "", exactCandidates[0].fecha) === 0)) {
+      const best = exactCandidates[0];
+      best.used = true;
+      usedCartolas.add(cart.id);
+      matches.push({
+        cartola_id: cart.id,
+        comprobante_id: best.comprobante_id,
+        monto: montoCart,
+        fecha_cartola: cart.fecha || "",
+        fecha_comprobante: best.fecha,
+        tipo_match: "exacto",
+      });
+    }
+  }
+
+  // Pass 2: Amount match (same amount + same type, within same month)
+  for (const cart of pendientes) {
+    if (usedCartolas.has(cart.id)) continue;
+    const montoCart = Math.abs(Number(cart.monto));
+    const tipoCart = cart.cargo_abono;
+
+    const amountCandidates = candidates
+      .filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart)
+      .sort((a, b) => daysDiff(cart.fecha || "", a.fecha) - daysDiff(cart.fecha || "", b.fecha));
+
+    // Only match if there's exactly one candidate for this amount (1:1)
+    const allSameAmount = candidates.filter((c) => !c.used && Math.abs(c.monto - montoCart) < 1 && c.cargo_abono === tipoCart);
+    const allSameAmountCartolas = pendientes.filter((p) => !usedCartolas.has(p.id) && Math.abs(Math.abs(Number(p.monto)) - montoCart) < 1 && p.cargo_abono === tipoCart);
+
+    if (amountCandidates.length === 1 && allSameAmountCartolas.length === 1) {
+      const best = amountCandidates[0];
+      best.used = true;
+      usedCartolas.add(cart.id);
+      matches.push({
+        cartola_id: cart.id,
+        comprobante_id: best.comprobante_id,
+        monto: montoCart,
+        fecha_cartola: cart.fecha || "",
+        fecha_comprobante: best.fecha,
+        tipo_match: "monto",
+      });
+    }
+  }
+
+  // Pass 3: Document match (bank description contains a doc number that exists in candidate)
+  for (const cart of pendientes) {
+    if (usedCartolas.has(cart.id)) continue;
+    const desc = (cart.descripcion || "").toLowerCase();
+    const numDocCart = (cart.num_doc || "").trim();
+    const tipoCart = cart.cargo_abono;
+
+    if (!numDocCart && !desc) continue;
+
+    for (const cand of candidates) {
+      if (cand.used || cand.cargo_abono !== tipoCart) continue;
+      const candDoc = (cand.num_doc || "").trim();
+
+      if (candDoc && candDoc.length >= 3) {
+        // Check if cartola description or num_doc contains the accounting doc number
+        if ((numDocCart && numDocCart === candDoc) || (desc && desc.includes(candDoc.toLowerCase()))) {
+          // Verify amounts are close enough (within 10% tolerance for partial payments)
+          const montoCart = Math.abs(Number(cart.monto));
+          if (Math.abs(cand.monto - montoCart) < 1) {
+            cand.used = true;
+            usedCartolas.add(cart.id);
+            matches.push({
+              cartola_id: cart.id,
+              comprobante_id: cand.comprobante_id,
+              monto: montoCart,
+              fecha_cartola: cart.fecha || "",
+              fecha_comprobante: cand.fecha,
+              tipo_match: "documento",
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 6. Save matches to database
+  if (matches.length > 0) {
+    for (const m of matches) {
+      await supabase
+        .from("cartolas")
+        .update({
+          contabilizado: true,
+          comprobante_id: m.comprobante_id,
+        })
+        .eq("id", m.cartola_id);
+    }
+
+    revalidatePath("/contable/conciliacion");
+  }
+
+  return { matched: matches.length, details: matches, error: null };
+}
+
 // ─── Documentos pendientes para un auxiliar ─────────────────────────────
 
 export async function getDocsPendientesAuxiliar(cuentaCodigo: string, auxiliarRut: string) {

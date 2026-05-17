@@ -14,23 +14,37 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   if (!comp) redirect("/contable/comprobantes");
 
-  const { data: movs } = await supabase
-    .from("mov_contables")
-    .select("*")
-    .eq("comprobante_id", comp.id)
-    .order("linea");
-
-  const { data: cuentas } = await supabase
-    .from("plan_cuentas")
-    .select("codigo, nombre, tipo, nivel, usa_auxiliar, usa_documento")
-    .eq("estado", "S")
-    .eq("nivel", 4)
-    .order("codigo");
+  const [{ data: movs }, { data: cuentas }, { data: tiposDoc }, { data: auxiliares }] =
+    await Promise.all([
+      supabase
+        .from("mov_contables")
+        .select("*")
+        .eq("comprobante_id", comp.id)
+        .order("linea"),
+      supabase
+        .from("plan_cuentas")
+        .select("codigo, nombre, tipo, nivel, usa_auxiliar, usa_documento")
+        .eq("estado", "S")
+        .eq("nivel", 4)
+        .order("codigo"),
+      supabase
+        .from("tipos_documento")
+        .select("codigo, nombre, abreviatura")
+        .eq("estado", "S")
+        .order("codigo"),
+      supabase
+        .from("auxiliares")
+        .select("rut, razon_social")
+        .eq("estado", "S")
+        .order("razon_social"),
+    ]);
 
   return (
     <DetalleComprobanteClient
       comprobante={{ ...comp, lineas: movs || [] }}
       cuentas={cuentas || []}
+      tiposDoc={tiposDoc || []}
+      auxiliares={auxiliares || []}
     />
   );
 }

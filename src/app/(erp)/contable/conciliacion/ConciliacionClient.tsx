@@ -9,8 +9,10 @@ import {
   anularContabilizacion,
   getDocsPendientesAuxiliar,
   cargarCartolaSantander,
+  matchAutomatico,
   type MovCartola,
   type ContabilizarInput,
+  type MatchResult,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -69,6 +71,27 @@ export default function ConciliacionClient({
   const [filtroTipo, setFiltroTipo] = useState<"todos" | "abonos" | "cargos">("todos");
   const [busqueda, setBusqueda] = useState("");
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
+  const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
+  const [matchLoading, setMatchLoading] = useState(false);
+
+  const ejecutarMatchAutomatico = () => {
+    if (!mesActivo) return;
+    setMatchLoading(true);
+    setMatchResult(null);
+    startTransition(async () => {
+      const result = await matchAutomatico(anio, mesActivo);
+      setMatchResult(result);
+      setMatchLoading(false);
+      if (result.error) {
+        setMensaje({ tipo: "error", texto: result.error });
+      } else if (result.matched > 0) {
+        setMensaje({ tipo: "ok", texto: `${result.matched} movimiento${result.matched > 1 ? "s" : ""} conciliado${result.matched > 1 ? "s" : ""} automáticamente` });
+        cargarMovimientos(mesActivo);
+      } else {
+        setMensaje({ tipo: "ok", texto: "No se encontraron coincidencias para conciliar automáticamente" });
+      }
+    });
+  };
 
   const cargarResumen = (year?: number) => {
     const y = year || anio;
@@ -597,6 +620,25 @@ export default function ConciliacionClient({
                 />
               </div>
 
+              {/* Match Automático */}
+              <button
+                onClick={ejecutarMatchAutomatico}
+                disabled={isPending || matchLoading || mesStats.pendientes === 0}
+                className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-40 transition-colors whitespace-nowrap flex items-center gap-1.5"
+              >
+                {matchLoading ? (
+                  <>
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Buscando...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    Match Automático
+                  </>
+                )}
+              </button>
+
               {/* Contabilizar Seleccionados */}
               <button
                 onClick={() => {
@@ -611,6 +653,38 @@ export default function ConciliacionClient({
               </button>
             </div>
           </div>
+
+          {/* Match Automático Result */}
+          {matchResult && matchResult.matched > 0 && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  <h4 className="font-semibold text-indigo-900 text-sm">Match Automático: {matchResult.matched} conciliado{matchResult.matched > 1 ? "s" : ""}</h4>
+                </div>
+                <button onClick={() => setMatchResult(null)} className="text-indigo-400 hover:text-indigo-600">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {matchResult.details.map((d, i) => (
+                  <div key={i} className="bg-white rounded-lg p-2.5 border border-indigo-100 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-semibold text-gray-900">{formatMonto(d.monto)}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        d.tipo_match === "exacto" ? "bg-emerald-100 text-emerald-700" :
+                        d.tipo_match === "monto" ? "bg-blue-100 text-blue-700" :
+                        "bg-purple-100 text-purple-700"
+                      }`}>
+                        {d.tipo_match === "exacto" ? "Exacto" : d.tipo_match === "monto" ? "Monto" : "Documento"}
+                      </span>
+                    </div>
+                    <p className="text-gray-500 mt-1">Cartola: {d.fecha_cartola} / Comp: {d.fecha_comprobante}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Tabla movimientos */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
