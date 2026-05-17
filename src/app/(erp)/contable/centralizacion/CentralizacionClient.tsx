@@ -33,7 +33,7 @@ type Historial = { id: number; tipo: string; periodo: string; fecha: string; com
 type Resumen = { ventas: Record<number, MesData>; compras: Record<number, MesData>; honorarios: Record<number, MesData>; transbank: Record<number, MesData>; historial: Historial[] };
 
 export default function CentralizacionClient({
-  periodos, cuentasVentas, cuentasGastos, reglas: reglasInit, currentYear,
+  periodos, cuentasVentas, cuentasGastos, reglas: reglasInit, configCent, currentYear,
 }: {
   periodos: Periodo[];
   cuentasVentas: Cuenta[];
@@ -81,6 +81,13 @@ export default function CentralizacionClient({
     });
   };
 
+  const cuentaDefaultPorLibro = (tipo: TipoLibro): string => {
+    if (tipo === "ventas") return configCent.CENT_CTA_VENTAS || "4-1-01-001";
+    if (tipo === "compras") return configCent.CENT_CTA_GASTOS || "5-1-01-001";
+    if (tipo === "honorarios") return configCent.CENT_CTA_HONORARIOS_GASTO || "5-1-02-001";
+    return "";
+  };
+
   const abrirLibro = (tipo: TipoLibro) => {
     setLibroActivo(tipo);
     setMesActivo(null);
@@ -88,11 +95,13 @@ export default function CentralizacionClient({
     setDocsHon([]);
     setDocsTransbank([]);
     setVistaReglas(false);
+    setCuentaContra(cuentaDefaultPorLibro(tipo));
   };
 
   const abrirLibroEnMes = (tipo: TipoLibro, mes: number) => {
     setLibroActivo(tipo);
     setVistaReglas(false);
+    setCuentaContra(cuentaDefaultPorLibro(tipo));
     startTransition(async () => {
       setMesActivo(mes);
       const { docs: d, docsHon: h, docsTransbank: t, error } = await getDocumentosPendientes(tipo, anio, mes);
