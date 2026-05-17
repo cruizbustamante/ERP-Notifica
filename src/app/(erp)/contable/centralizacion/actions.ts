@@ -322,7 +322,8 @@ export async function previsualizarCentralizacion(
   anio: number,
   mes: number,
   cuentaContrapartida: string,
-  docIds: number[]
+  docIds: number[],
+  cuentasPorDoc?: Record<number, string>
 ): Promise<{ lineas: LineaPreview[]; totalDebe: number; totalHaber: number; error: string | null }> {
   const config = await getConfig();
 
@@ -357,7 +358,7 @@ export async function previsualizarCentralizacion(
     const selectedDocs = docs.filter((d) => docIds.includes(d.id));
     if (selectedDocs.length === 0) return { lineas: [], totalDebe: 0, totalHaber: 0, error: "Sin documentos" };
     if (tipo === "ventas") lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap);
-    else lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap);
+    else lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc);
   }
 
   let totalDebe = 0, totalHaber = 0;
@@ -383,7 +384,8 @@ export async function centralizarDocumentos(
   anio: number,
   mes: number,
   cuentaContrapartida: string,
-  docIds: number[]
+  docIds: number[],
+  cuentasPorDoc?: Record<number, string>
 ) {
   await requireRol("contador");
   const supabase = await createClient();
@@ -437,7 +439,7 @@ export async function centralizarDocumentos(
     if (tipo === "ventas") {
       lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap);
     } else {
-      lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap);
+      lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc);
     }
   }
 
@@ -922,7 +924,7 @@ function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: R
   return lineas;
 }
 
-function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: Record<string, string>, reglasMap: Map<string, string>) {
+function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: Record<string, string>, reglasMap: Map<string, string>, cuentasPorDoc?: Record<number, string>) {
   const ctaProveedores = config.CENT_CTA_PROVEEDORES || "2-1-02-001";
   const ctaIVACredito = config.CENT_CTA_IVA_CREDITO || "1-1-07-002";
   const ctaGastoDefault = cuentaGasto || config.CENT_CTA_GASTOS || "5-1-01-001";
@@ -955,8 +957,7 @@ function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: R
       referencia,
     });
 
-    // Acumular por cuenta (regla o default)
-    const ctaGasto = reglasMap.get(doc.rut) || ctaGastoDefault;
+    const ctaGasto = cuentasPorDoc?.[doc.id] || reglasMap.get(doc.rut) || ctaGastoDefault;
     const signo = isNC ? -1 : 1;
     gastosPorCuenta.set(ctaGasto, (gastosPorCuenta.get(ctaGasto) || 0) + montoNeto * signo);
     totalIVA += montoIVA * signo;

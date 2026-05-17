@@ -56,6 +56,7 @@ export default function CentralizacionClient({
   const [mesActivo, setMesActivo] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [cuentaContra, setCuentaContra] = useState("");
+  const [cuentasPorDoc, setCuentasPorDoc] = useState<Record<number, string>>({});
   const [filtroEstado, setFiltroEstado] = useState<"todos" | "pendiente" | "centralizado">("pendiente");
 
   // Preview
@@ -99,6 +100,17 @@ export default function CentralizacionClient({
     setCuentaContra(cuentaDefaultPorLibro(tipo));
   };
 
+  const buildCuentasIniciales = (tipo: TipoLibro, documentos: DocPendiente[]) => {
+    if (tipo !== "compras") return {};
+    const ctaDefault = cuentaDefaultPorLibro("compras");
+    const map: Record<number, string> = {};
+    for (const d of documentos) {
+      const regla = reglas.find((r) => r.rut === d.rut && r.tipo === "COMPRAS");
+      map[d.id] = regla?.cuenta_codigo || ctaDefault;
+    }
+    return map;
+  };
+
   const abrirLibroEnMes = (tipo: TipoLibro, mes: number) => {
     setLibroActivo(tipo);
     setVistaReglas(false);
@@ -111,6 +123,7 @@ export default function CentralizacionClient({
       setDocsHon(h);
       setDocsTransbank(t);
       setSelectedIds(new Set(tipo === "transbank" ? t.map((x) => x.id) : tipo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
+      setCuentasPorDoc(buildCuentasIniciales(tipo, d));
       setFiltroEstado("pendiente");
       setMensaje(null);
     });
@@ -126,6 +139,7 @@ export default function CentralizacionClient({
       setDocsHon(h);
       setDocsTransbank(t);
       setSelectedIds(new Set(libroActivo === "transbank" ? t.map((x) => x.id) : libroActivo === "honorarios" ? h.map((x) => x.id) : d.map((x) => x.id)));
+      setCuentasPorDoc(buildCuentasIniciales(libroActivo, d));
       setFiltroEstado("pendiente");
       setMensaje(null);
     });
@@ -141,7 +155,8 @@ export default function CentralizacionClient({
     }
 
     startTransition(async () => {
-      const result = await previsualizarCentralizacion(libroActivo, anio, mesActivo, cuenta, [...selectedIds]);
+      const ctasDoc = libroActivo === "compras" ? cuentasPorDoc : undefined;
+      const result = await previsualizarCentralizacion(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc);
       if (result.error) { setMensaje({ tipo: "error", texto: result.error }); return; }
       setPreview({ lineas: result.lineas, totalDebe: result.totalDebe, totalHaber: result.totalHaber });
     });
@@ -156,7 +171,8 @@ export default function CentralizacionClient({
     }
 
     startTransition(async () => {
-      const result = await centralizarDocumentos(libroActivo, anio, mesActivo, cuenta, [...selectedIds]);
+      const ctasDoc = libroActivo === "compras" ? cuentasPorDoc : undefined;
+      const result = await centralizarDocumentos(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc);
       if (result.error) {
         setMensaje({ tipo: "error", texto: result.error });
       } else {
@@ -219,7 +235,7 @@ export default function CentralizacionClient({
 
         let periodoArchivo: { anio: number; mes: number } | undefined;
         if (tipo === "compras") {
-          const match = file.name.match(/(\d{4})(\d{2})/);
+          const match = file.name.match(/(20\d{2})(0[1-9]|1[0-2])(?=[^0-9]|$)/);
           if (match) periodoArchivo = { anio: Number(match[1]), mes: Number(match[2]) };
         }
 
@@ -758,7 +774,20 @@ export default function CentralizacionClient({
                 <label className="text-sm font-medium text-gray-700 whitespace-nowrap">
                   Cuenta {libroActivo === "ventas" ? "Ingresos" : "Gastos"} (por defecto):
                 </label>
-                <select value={cuentaContra} onChange={(e) => setCuentaContra(e.target.value)} className="flex-1 min-w-[200px] border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                <select value={cuentaContra} onChange={(e) => {
+                  const newCta = e.target.value;
+                  setCuentaContra(newCta);
+                  if (libroActivo === "compras") {
+                    setCuentasPorDoc(prev => {
+                      const updated = { ...prev };
+                      for (const d of docs) {
+                        const tieneRegla = reglas.some((r) => r.rut === d.rut && r.tipo === "COMPRAS");
+                        if (!tieneRegla) updated[d.id] = newCta;
+                      }
+                      return updated;
+                    });
+                  }
+                }} className="flex-1 min-w-[200px] border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
                   {(libroActivo === "ventas" ? cuentasVentas : cuentasGastos).map((c) => (
                     <option key={c.codigo} value={c.codigo}>{c.codigo} — {c.nombre}</option>
                   ))}
@@ -799,8 +828,18 @@ export default function CentralizacionClient({
                           <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_neto)}</td>
                           <td className="py-1.5 text-right font-mono">{formatMonto(d.monto_iva)}</td>
                           <td className="py-1.5 text-right font-mono font-medium">{formatMonto(d.monto_total)}</td>
-                          <td className="py-1.5 text-xs">
-                            {regla && <span className="px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-mono">{regla.cuenta_codigo}</span>}
+                          <td className="py-1.5">
+                            {libroActivo === "compras" ? (
+                              <select
+                                value={cuentasPorDoc[d.id] || cuentaContra}
+                                onChange={(e) => setCuentasPorDoc(prev => ({ ...prev, [d.id]: e.target.value }))}
+                                className={`text-xs border rounded px-1 py-0.5 w-[110px] font-mono ${regla ? "border-purple-300 bg-purple-50" : "border-gray-200"}`}
+                              >
+                                {cuentasGastos.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo}</option>)}
+                              </select>
+                            ) : regla ? (
+                              <span className="px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-mono text-xs">{regla.cuenta_codigo}</span>
+                            ) : null}
                           </td>
                           <td className="py-1.5 text-xs text-gray-500">{d.ref_tipo && d.ref_folio ? `${d.ref_tipo} ${d.ref_folio}` : ""}</td>
                         </tr>
