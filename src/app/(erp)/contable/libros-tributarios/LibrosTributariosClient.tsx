@@ -9,6 +9,11 @@ import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
 type Periodo = { anio: number; estado: string };
 type Tab = "ventas" | "compras" | "honorarios";
 
+const DTES_NC = [61, 111];
+
+function esNC(dte: number) { return DTES_NC.includes(dte); }
+function signo(dte: number) { return esNC(dte) ? -1 : 1; }
+
 export default function LibrosTributariosClient({
   periodos, currentYear,
 }: {
@@ -40,7 +45,15 @@ export default function LibrosTributariosClient({
   };
 
   const totales = docs.reduce(
-    (t, d) => ({ exento: t.exento + d.monto_exento, neto: t.neto + d.monto_neto, iva: t.iva + d.monto_iva, total: t.total + d.monto_total }),
+    (t, d) => {
+      const s = signo(d.tipo_dte);
+      return {
+        exento: t.exento + d.monto_exento * s,
+        neto: t.neto + d.monto_neto * s,
+        iva: t.iva + d.monto_iva * s,
+        total: t.total + d.monto_total * s,
+      };
+    },
     { exento: 0, neto: 0, iva: 0, total: 0 }
   );
 
@@ -48,6 +61,9 @@ export default function LibrosTributariosClient({
     (t, d) => ({ bruto: t.bruto + d.monto_bruto, retencion: t.retencion + d.retencion, liquido: t.liquido + d.monto_liquido }),
     { bruto: 0, retencion: 0, liquido: 0 }
   );
+
+  const nDocs = docs.length;
+  const nNC = docs.filter((d) => esNC(d.tipo_dte)).length;
 
   const descargarExcel = async () => {
     const periodo = `${MESES[mes]} ${anio}`;
@@ -62,18 +78,18 @@ export default function LibrosTributariosClient({
         columnas: [
           { key: "folio", header: "Folio", width: 10 },
           { key: "rut", header: "RUT", width: 14 },
-          { key: "razon_social", header: "Razón Social", width: 30 },
+          { key: "razon_social", header: "Razon Social", width: 30 },
           { key: "fecha", header: "Fecha", width: 12 },
           { key: "bruto", header: "Bruto", width: 16, numFmt: "#,##0", alignment: right },
-          { key: "retencion", header: "Retención", width: 16, numFmt: "#,##0", alignment: right },
-          { key: "liquido", header: "Líquido", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "retencion", header: "Retencion", width: 16, numFmt: "#,##0", alignment: right },
+          { key: "liquido", header: "Liquido", width: 16, numFmt: "#,##0", alignment: right },
           { key: "centralizado", header: "Cent.", width: 8 },
         ],
         datos: docsHon.map((d) => ({
           folio: d.folio, rut: d.rut, razon_social: d.razon_social,
           fecha: d.fecha_emision || "", bruto: d.monto_bruto,
           retencion: d.retencion, liquido: d.monto_liquido,
-          centralizado: d.centralizado ? "Sí" : "No",
+          centralizado: d.centralizado ? "Si" : "No",
         })),
         totales: {
           folio: `TOTALES (${docsHon.length})`, bruto: totalesHon.bruto,
@@ -92,22 +108,29 @@ export default function LibrosTributariosClient({
           { key: "folio", header: "Folio", width: 10 },
           { key: "fecha", header: "Fecha", width: 12 },
           { key: "rut", header: "RUT", width: 14 },
-          { key: "razon_social", header: "Razón Social", width: 30 },
+          { key: "razon_social", header: "Razon Social", width: 30 },
           { key: "exento", header: "Exento", width: 14, numFmt: "#,##0", alignment: right },
           { key: "neto", header: "Neto", width: 14, numFmt: "#,##0", alignment: right },
           { key: "iva", header: "IVA", width: 14, numFmt: "#,##0", alignment: right },
           { key: "total", header: "Total", width: 16, numFmt: "#,##0", alignment: right },
           { key: "centralizado", header: "Cent.", width: 8 },
         ],
-        datos: docs.map((d) => ({
-          tipo: d.tipo_dte_nombre, folio: d.folio, fecha: d.fecha_emision || "",
-          rut: d.rut, razon_social: d.razon_social, exento: d.monto_exento,
-          neto: d.monto_neto, iva: d.monto_iva, total: d.monto_total,
-          centralizado: d.centralizado ? "Sí" : "No",
-        })),
+        datos: docs.map((d) => {
+          const s = signo(d.tipo_dte);
+          return {
+            tipo: d.tipo_dte_nombre, folio: d.folio, fecha: d.fecha_emision || "",
+            rut: d.rut, razon_social: d.razon_social,
+            exento: d.monto_exento * s || "",
+            neto: d.monto_neto * s,
+            iva: d.monto_iva * s,
+            total: d.monto_total * s,
+            centralizado: d.centralizado ? "Si" : "No",
+          };
+        }),
         totales: {
-          tipo: `TOTALES (${docs.length})`, exento: totales.exento,
-          neto: totales.neto, iva: totales.iva, total: totales.total,
+          tipo: `TOTALES (${nDocs} docs${nNC > 0 ? `, ${nNC} NC` : ""})`,
+          exento: totales.exento, neto: totales.neto,
+          iva: totales.iva, total: totales.total,
         },
       });
       await descargarWorkbook(wb, `Libro_${tab === "ventas" ? "Ventas" : "Compras"}_${anio}_${mesStr}.xlsx`);
@@ -116,16 +139,16 @@ export default function LibrosTributariosClient({
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Libros Tributarios</h1>
-            <p className="text-gray-500 mt-1">Registro de ventas, compras y honorarios SII</p>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Libros Tributarios</h1>
+            <p className="text-gray-500 mt-1 text-sm">Registro de ventas, compras y honorarios SII</p>
           </div>
         </div>
         <div className="flex items-end gap-3 flex-wrap">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Año</label>
+            <label className="block text-xs text-gray-500 mb-1">Ano</label>
             <select value={anio} onChange={(e) => setAnio(Number(e.target.value))} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
               {periodos.map((p) => <option key={p.anio} value={p.anio}>{p.anio}</option>)}
             </select>
@@ -161,9 +184,11 @@ export default function LibrosTributariosClient({
       {/* Tabla Ventas/Compras */}
       {loaded && tab !== "honorarios" && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
-          <div className="p-4 border-b flex items-center justify-between">
-            <span className="text-sm text-gray-500">{docs.length} documentos — {MESES[mes]} {anio}</span>
-            <span className="text-sm font-medium">Total: <span className="font-mono">{formatMonto(totales.total)}</span></span>
+          <div className="p-4 border-b flex items-center justify-between flex-wrap gap-2">
+            <span className="text-sm text-gray-500">
+              {nDocs} documentos{nNC > 0 && <span className="text-red-600"> ({nNC} NC)</span>} — {MESES[mes]} {anio}
+            </span>
+            <span className="text-sm font-medium">Total Neto: <span className="font-mono">{formatMonto(totales.neto)}</span></span>
           </div>
           <table className="w-full text-sm">
             <thead>
@@ -172,7 +197,7 @@ export default function LibrosTributariosClient({
                 <th className="px-3 py-2 font-medium">Folio</th>
                 <th className="px-3 py-2 font-medium">Fecha</th>
                 <th className="px-3 py-2 font-medium">RUT</th>
-                <th className="px-3 py-2 font-medium">Razón Social</th>
+                <th className="px-3 py-2 font-medium">Razon Social</th>
                 <th className="px-3 py-2 font-medium text-right">Exento</th>
                 <th className="px-3 py-2 font-medium text-right">Neto</th>
                 <th className="px-3 py-2 font-medium text-right">IVA</th>
@@ -181,28 +206,42 @@ export default function LibrosTributariosClient({
               </tr>
             </thead>
             <tbody>
-              {docs.map((d) => (
-                <tr key={d.id} className="border-b hover:bg-gray-50">
-                  <td className="px-3 py-1.5">
-                    <span className="inline-block px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">{d.tipo_dte_nombre}</span>
-                  </td>
-                  <td className="px-3 py-1.5 font-mono">{d.folio}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap">{d.fecha_emision}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
-                  <td className="px-3 py-1.5 truncate max-w-[200px]">{d.razon_social}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{d.monto_exento > 0 ? formatMonto(d.monto_exento) : ""}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{formatMonto(d.monto_neto)}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{formatMonto(d.monto_iva)}</td>
-                  <td className="px-3 py-1.5 text-right font-mono font-medium">{formatMonto(d.monto_total)}</td>
-                  <td className="px-3 py-1.5 text-center">
-                    {d.centralizado
-                      ? <span className="text-green-600 text-xs font-medium">Si</span>
-                      : <span className="text-gray-400 text-xs">No</span>}
-                  </td>
-                </tr>
-              ))}
+              {docs.map((d) => {
+                const isNotaCredito = esNC(d.tipo_dte);
+                const s = signo(d.tipo_dte);
+                return (
+                  <tr key={d.id} className={`border-b hover:bg-gray-50 ${isNotaCredito ? "bg-red-50/50" : ""}`}>
+                    <td className="px-3 py-1.5">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${isNotaCredito ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-700"}`}>
+                        {d.tipo_dte_nombre}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 font-mono">{d.folio}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">{d.fecha_emision}</td>
+                    <td className="px-3 py-1.5 font-mono text-xs">{formatRut(d.rut)}</td>
+                    <td className="px-3 py-1.5 truncate max-w-[200px]">{d.razon_social}</td>
+                    <td className={`px-3 py-1.5 text-right font-mono ${isNotaCredito ? "text-red-600" : ""}`}>
+                      {d.monto_exento > 0 ? formatMonto(d.monto_exento * s) : ""}
+                    </td>
+                    <td className={`px-3 py-1.5 text-right font-mono ${isNotaCredito ? "text-red-600" : ""}`}>
+                      {formatMonto(d.monto_neto * s)}
+                    </td>
+                    <td className={`px-3 py-1.5 text-right font-mono ${isNotaCredito ? "text-red-600" : ""}`}>
+                      {formatMonto(d.monto_iva * s)}
+                    </td>
+                    <td className={`px-3 py-1.5 text-right font-mono font-medium ${isNotaCredito ? "text-red-600" : ""}`}>
+                      {formatMonto(d.monto_total * s)}
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      {d.centralizado
+                        ? <span className="text-green-600 text-xs font-medium">Si</span>
+                        : <span className="text-gray-400 text-xs">No</span>}
+                    </td>
+                  </tr>
+                );
+              })}
               <tr className="border-t-2 border-gray-300 bg-gray-50 font-medium">
-                <td colSpan={5} className="px-3 py-2">TOTALES ({docs.length} docs)</td>
+                <td colSpan={5} className="px-3 py-2">TOTALES ({nDocs} docs{nNC > 0 ? `, ${nNC} NC` : ""})</td>
                 <td className="px-3 py-2 text-right font-mono">{formatMonto(totales.exento)}</td>
                 <td className="px-3 py-2 text-right font-mono">{formatMonto(totales.neto)}</td>
                 <td className="px-3 py-2 text-right font-mono">{formatMonto(totales.iva)}</td>
@@ -212,7 +251,7 @@ export default function LibrosTributariosClient({
             </tbody>
           </table>
           {docs.length === 0 && (
-            <div className="p-8 text-center text-gray-500 text-sm">Sin documentos para el período seleccionado</div>
+            <div className="p-8 text-center text-gray-500 text-sm">Sin documentos para el periodo seleccionado</div>
           )}
         </div>
       )}
@@ -229,11 +268,11 @@ export default function LibrosTributariosClient({
               <tr className="text-left text-gray-500 border-b bg-gray-50">
                 <th className="px-3 py-2 font-medium">Folio</th>
                 <th className="px-3 py-2 font-medium">RUT</th>
-                <th className="px-3 py-2 font-medium">Razón Social</th>
+                <th className="px-3 py-2 font-medium">Razon Social</th>
                 <th className="px-3 py-2 font-medium">Fecha</th>
                 <th className="px-3 py-2 font-medium text-right">Bruto</th>
-                <th className="px-3 py-2 font-medium text-right">Retención</th>
-                <th className="px-3 py-2 font-medium text-right">Líquido</th>
+                <th className="px-3 py-2 font-medium text-right">Retencion</th>
+                <th className="px-3 py-2 font-medium text-right">Liquido</th>
                 <th className="px-3 py-2 font-medium text-center">Cent.</th>
               </tr>
             </thead>
@@ -264,7 +303,7 @@ export default function LibrosTributariosClient({
             </tbody>
           </table>
           {docsHon.length === 0 && (
-            <div className="p-8 text-center text-gray-500 text-sm">Sin boletas de honorarios para el período seleccionado</div>
+            <div className="p-8 text-center text-gray-500 text-sm">Sin boletas de honorarios para el periodo seleccionado</div>
           )}
         </div>
       )}
