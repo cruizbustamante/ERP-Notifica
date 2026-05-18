@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useCallback } from "react";
+import { useState, useTransition, useCallback, useEffect } from "react";
 import { formatRut } from "@/lib/rut";
 import { MESES } from "@/lib/contabilidad/core";
 import YearSelector from "@/components/YearSelector";
@@ -99,10 +99,26 @@ export default function MarketplaceClient({
   const [detalleTx, setDetalleTx] = useState<Transaccion | null>(null);
   const [editMode, setEditMode] = useState(false);
 
-  // Lazy-loaded data
+  // Lazy-loaded data — se limpia al cambiar de año
   const [resumenMensual, setResumenMensual] = useState<ResumenMensualMKT[] | null>(null);
   const [comparativo, setComparativo] = useState<ComparativoNegocio[] | null>(null);
   const [rentabilidad, setRentabilidad] = useState<RentabilidadPlataforma[] | null>(null);
+  useEffect(() => {
+    setResumenMensual(null);
+    setComparativo(null);
+    setRentabilidad(null);
+    setTransacciones(transaccionesIniciales);
+    if (vista === "Negocio") {
+      Promise.all([getComparativoNegocios(anio), getRentabilidadPorPlataforma()]).then(([comp, rent]) => {
+        if (!comp.error) setComparativo(comp.data);
+        if (!rent.error) setRentabilidad(rent.data);
+      });
+    }
+    if (vista === "Boletas") {
+      getResumenMensualMKT(anio).then((res) => { if (!res.error) setResumenMensual(res.data); });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anio, transaccionesIniciales]);
 
   const pendientes = transacciones.filter((t) => t.estado === "PENDIENTE");
   const pagados = transacciones.filter((t) => t.estado === "PAGADO");
