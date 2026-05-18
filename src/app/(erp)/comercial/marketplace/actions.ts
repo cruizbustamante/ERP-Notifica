@@ -167,6 +167,43 @@ export async function marcarPagado(ids: number[], referencia: string, fechaPago:
   return { error: null };
 }
 
+export async function editarTransaccion(id: number, data: {
+  receptor_rut: string;
+  receptor_nombre: string;
+  monto_bruto: number;
+  plataforma: string;
+  card_type: string;
+  fecha_transaccion: string;
+}) {
+  await requireRol("comercial");
+  const supabase = await createClient();
+  const tasas = await getTasas();
+  const desglose = calcularDesglose(data.monto_bruto, tasas.comisionNL);
+  const costoPlat = calcularCostoPlataforma(data.monto_bruto, data.plataforma, data.card_type, tasas);
+
+  const { error } = await supabase
+    .from("marketplace_transacciones")
+    .update({
+      receptor_rut: data.receptor_rut,
+      receptor_nombre: data.receptor_nombre,
+      monto_bruto: data.monto_bruto,
+      base_receptor: desglose.base_receptor,
+      comision_nl_bruta: desglose.comision_nl_bruta,
+      comision_nl_neta: desglose.comision_nl_neta,
+      iva_comision: desglose.iva_comision,
+      costo_plataforma: costoPlat,
+      costo_tbk: costoPlat,
+      plataforma: data.plataforma,
+      card_type: data.card_type || null,
+      fecha_transaccion: data.fecha_transaccion,
+    })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/comercial/marketplace");
+  return { error: null };
+}
+
 export async function anularTransaccion(id: number) {
   await requireRol("comercial");
   const supabase = await createClient();

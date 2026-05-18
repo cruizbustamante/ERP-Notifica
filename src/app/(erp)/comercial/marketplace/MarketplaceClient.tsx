@@ -9,6 +9,7 @@ import {
   getTransacciones,
   marcarPagado,
   anularTransaccion,
+  editarTransaccion,
   marcarBoletaEmitida,
   getResumenMensualMKT,
   getComparativoNegocios,
@@ -88,10 +89,15 @@ export default function MarketplaceClient({
   const [vista, setVista] = useState<Tab>("Dashboard");
   const [filtroEstado, setFiltroEstado] = useState("TODOS");
   const [filtroReceptor, setFiltroReceptor] = useState("");
+  const [filtroMes, setFiltroMes] = useState(0);
+  const [filtroDesde, setFiltroDesde] = useState("");
+  const [filtroHasta, setFiltroHasta] = useState("");
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const [isPending, startTransition] = useTransition();
   const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
   const [showPagoModal, setShowPagoModal] = useState(false);
+  const [detalleTx, setDetalleTx] = useState<Transaccion | null>(null);
+  const [editMode, setEditMode] = useState(false);
 
   // Lazy-loaded data
   const [resumenMensual, setResumenMensual] = useState<ResumenMensualMKT[] | null>(null);
@@ -106,8 +112,19 @@ export default function MarketplaceClient({
   const filtradas = transacciones.filter((t) => {
     if (filtroEstado !== "TODOS" && t.estado !== filtroEstado) return false;
     if (filtroReceptor && t.receptor_rut !== filtroReceptor) return false;
+    if (filtroMes > 0) {
+      const m = new Date(t.fecha_transaccion + "T12:00:00").getMonth() + 1;
+      if (m !== filtroMes) return false;
+    }
+    if (filtroDesde && t.fecha_transaccion < filtroDesde) return false;
+    if (filtroHasta && t.fecha_transaccion > filtroHasta) return false;
     return true;
   });
+
+  async function refrescarTransacciones() {
+    const fresh = await getTransacciones({});
+    if (!fresh.error) setTransacciones(fresh.data as Transaccion[]);
+  }
 
   const resumenReceptores = (() => {
     const mapa: Record<string, { rut: string; nombre: string; pendiente: number; pagado: number; transacciones: number; comisionNeta: number; costoPlat: number; margen: number }> = {};
@@ -141,13 +158,6 @@ export default function MarketplaceClient({
       if (!comp.error) setComparativo(comp.data);
       if (!rent.error) setRentabilidad(rent.data);
     }
-  }
-
-  async function handleFiltrar() {
-    startTransition(async () => {
-      const result = await getTransacciones({ estado: filtroEstado, receptor_rut: filtroReceptor || undefined });
-      if (!result.error) setTransacciones(result.data as Transaccion[]);
-    });
   }
 
   function toggleSeleccion(id: number) {
@@ -320,6 +330,7 @@ export default function MarketplaceClient({
       {/* ═══ TAB: Transacciones ═══ */}
       {vista === "Transacciones" && (
         <div className="space-y-3">
+          {/* Filtros */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-wrap items-end gap-3">
             <div>
               <label className="text-[11px] text-gray-500 uppercase font-medium">Estado</label>
@@ -339,8 +350,28 @@ export default function MarketplaceClient({
                 {receptores.map((r) => <option key={r.rut} value={r.rut}>{r.nombre}</option>)}
               </select>
             </div>
-            <button onClick={handleFiltrar} disabled={isPending}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium">Filtrar</button>
+            <div>
+              <label className="text-[11px] text-gray-500 uppercase font-medium">Mes</label>
+              <select value={filtroMes} onChange={(e) => setFiltroMes(Number(e.target.value))}
+                className="mt-1 block w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                <option value={0}>Todos</option>
+                {MESES.slice(1).map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-500 uppercase font-medium">Desde</label>
+              <input type="date" value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)}
+                className="mt-1 block w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="text-[11px] text-gray-500 uppercase font-medium">Hasta</label>
+              <input type="date" value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)}
+                className="mt-1 block w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            {(filtroEstado !== "TODOS" || filtroReceptor || filtroMes > 0 || filtroDesde || filtroHasta) && (
+              <button onClick={() => { setFiltroEstado("TODOS"); setFiltroReceptor(""); setFiltroMes(0); setFiltroDesde(""); setFiltroHasta(""); }}
+                className="text-xs text-gray-500 hover:text-gray-700 underline">Limpiar</button>
+            )}
             {seleccionados.size > 0 && (
               <button onClick={() => setShowPagoModal(true)}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium ml-auto">
@@ -349,6 +380,15 @@ export default function MarketplaceClient({
             )}
           </div>
 
+          {/* Resumen filtro */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="bg-gray-100 text-gray-700 px-3 py-1.5 rounded-lg font-medium">{filtradas.length} transacciones</span>
+            <span className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg font-mono">${fmt(filtradas.reduce((s, t) => s + (t.estado !== "ANULADO" ? Number(t.monto_bruto) : 0), 0))} bruto</span>
+            <span className="bg-green-50 text-green-700 px-3 py-1.5 rounded-lg font-mono">${fmt(filtradas.reduce((s, t) => s + (t.estado !== "ANULADO" ? Number(t.comision_nl_neta) : 0), 0))} comisión</span>
+            <span className="bg-red-50 text-red-700 px-3 py-1.5 rounded-lg font-mono">-${fmt(filtradas.reduce((s, t) => s + (t.estado !== "ANULADO" ? Number(t.costo_plataforma) : 0), 0))} costos</span>
+          </div>
+
+          {/* Tabla */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -362,25 +402,29 @@ export default function MarketplaceClient({
                     <th className="px-3 py-2.5 text-left font-medium">Fecha</th>
                     <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Orden</th>
                     <th className="px-3 py-2.5 text-left font-medium">Receptor</th>
+                    <th className="px-3 py-2.5 text-center font-medium hidden sm:table-cell">Plat.</th>
                     <th className="px-3 py-2.5 text-right font-medium">Bruto</th>
-                    <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Base</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden md:table-cell">Comisión</th>
-                    <th className="px-3 py-2.5 text-right font-medium hidden lg:table-cell">Costo Plat.</th>
+                    <th className="px-3 py-2.5 text-right font-medium hidden lg:table-cell">Costo</th>
                     <th className="px-3 py-2.5 text-center font-medium">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtradas.map((t) => (
-                    <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                      <td className="px-3 py-2.5">{t.estado === "PENDIENTE" && <input type="checkbox" checked={seleccionados.has(t.id)} onChange={() => toggleSeleccion(t.id)} className="rounded" />}</td>
+                    <tr key={t.id} className="border-b border-gray-50 hover:bg-indigo-50/30 cursor-pointer transition" onClick={() => { setDetalleTx(t); setEditMode(false); }}>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>{t.estado === "PENDIENTE" && <input type="checkbox" checked={seleccionados.has(t.id)} onChange={() => toggleSeleccion(t.id)} className="rounded" />}</td>
                       <td className="px-3 py-2.5 text-gray-600 text-xs">{new Date(t.fecha_transaccion + "T12:00:00").toLocaleDateString("es-CL")}</td>
                       <td className="px-3 py-2.5 font-mono text-xs text-indigo-700 hidden sm:table-cell">{t.orden_id}</td>
                       <td className="px-3 py-2.5">
                         <div className="text-xs font-medium">{t.receptor_nombre}</div>
                         <div className="text-[11px] text-gray-400 font-mono">{formatRut(t.receptor_rut)}</div>
                       </td>
+                      <td className="px-3 py-2.5 text-center hidden sm:table-cell">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${t.plataforma === "TBK" ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700"}`}>
+                          {t.plataforma === "TBK" ? "TBK" : "MP"}
+                        </span>
+                      </td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs">${fmt(Number(t.monto_bruto))}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-xs text-amber-700 hidden sm:table-cell">${fmt(Number(t.base_receptor))}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-indigo-600 hidden md:table-cell">${fmt(Number(t.comision_nl_neta))}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-red-500 hidden lg:table-cell">{Number(t.costo_plataforma) > 0 ? `-$${fmt(Number(t.costo_plataforma))}` : "—"}</td>
                       <td className="px-3 py-2.5 text-center">
@@ -392,9 +436,43 @@ export default function MarketplaceClient({
                 </tbody>
               </table>
             </div>
-            <div className="border-t px-4 py-2 text-xs text-gray-400">{filtradas.length} transacciones</div>
+            <div className="border-t px-4 py-2 text-xs text-gray-400">{filtradas.length} transacciones — click en una fila para ver detalle</div>
           </div>
         </div>
+      )}
+
+      {/* ═══ Modal Detalle / Edición ═══ */}
+      {detalleTx && (
+        <DetalleModal
+          tx={detalleTx}
+          editMode={editMode}
+          setEditMode={setEditMode}
+          auxiliares={auxiliares}
+          isPending={isPending}
+          onClose={() => { setDetalleTx(null); setEditMode(false); }}
+          onSave={async (data) => {
+            startTransition(async () => {
+              const res = await editarTransaccion(detalleTx.id, data);
+              if (res.error) setMensaje({ tipo: "error", texto: res.error });
+              else {
+                setMensaje({ tipo: "ok", texto: "Transacción actualizada" });
+                setDetalleTx(null); setEditMode(false);
+                await refrescarTransacciones();
+              }
+            });
+          }}
+          onAnular={async () => {
+            startTransition(async () => {
+              const res = await anularTransaccion(detalleTx.id);
+              if (res.error) setMensaje({ tipo: "error", texto: res.error });
+              else {
+                setMensaje({ tipo: "ok", texto: "Transacción anulada" });
+                setDetalleTx(null); setEditMode(false);
+                await refrescarTransacciones();
+              }
+            });
+          }}
+        />
       )}
 
       {/* ═══ TAB: Boletas ═══ */}
@@ -934,6 +1012,201 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function DetalleModal({ tx, editMode, setEditMode, auxiliares, isPending, onClose, onSave, onAnular }: {
+  tx: Transaccion;
+  editMode: boolean;
+  setEditMode: (v: boolean) => void;
+  auxiliares: Auxiliar[];
+  isPending: boolean;
+  onClose: () => void;
+  onSave: (data: { receptor_rut: string; receptor_nombre: string; monto_bruto: number; plataforma: string; card_type: string; fecha_transaccion: string }) => void;
+  onAnular: () => void;
+}) {
+  const [form, setForm] = useState({
+    receptor_rut: tx.receptor_rut,
+    receptor_nombre: tx.receptor_nombre || "",
+    monto_bruto: Number(tx.monto_bruto),
+    plataforma: tx.plataforma || "TBK",
+    card_type: tx.plataforma === "TBK" ? (tx.lote_carga ? "Visa Débito" : "") : "",
+    fecha_transaccion: tx.fecha_transaccion,
+  });
+  const [confirmarAnular, setConfirmarAnular] = useState(false);
+
+  const margen = Number(tx.comision_nl_neta) - Number(tx.costo_plataforma);
+
+  const fmtFecha = (f: string | null) => f ? new Date(f + "T12:00:00").toLocaleDateString("es-CL") : "—";
+
+  const Row = ({ label, value, color }: { label: string; value: string; color?: string }) => (
+    <div className="flex justify-between py-1.5 border-b border-gray-50">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className={`text-xs font-mono font-medium ${color || "text-gray-900"}`}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-8 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-hidden animate-modal" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="relative px-6 py-4 text-white" style={{ background: "linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%)" }}>
+          <button onClick={onClose} className="absolute top-3 right-4 text-white/60 hover:text-white text-xl font-light">×</button>
+          <div className="flex items-center gap-3">
+            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${tx.plataforma === "TBK" ? "bg-orange-400/20 text-orange-200" : "bg-sky-400/20 text-sky-200"}`}>
+              {tx.plataforma === "TBK" ? "Transbank" : "Mercado Pago"}
+            </span>
+            <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${tx.estado === "PENDIENTE" ? "bg-amber-400/20 text-amber-200" : tx.estado === "PAGADO" ? "bg-green-400/20 text-green-200" : "bg-red-400/20 text-red-200"}`}>
+              {tx.estado}
+            </span>
+          </div>
+          <p className="text-lg font-bold mt-2">${fmt(Number(tx.monto_bruto))}</p>
+          <p className="text-sm text-white/70">Orden: {tx.orden_id}</p>
+        </div>
+
+        <div className="p-6 overflow-y-auto max-h-[60vh] space-y-4">
+          {!editMode ? (
+            <>
+              {/* Vista detalle */}
+              <div>
+                <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Receptor</h4>
+                <p className="text-sm font-medium text-gray-900">{tx.receptor_nombre}</p>
+                <p className="text-xs text-gray-500 font-mono">{formatRut(tx.receptor_rut)}</p>
+              </div>
+
+              <div>
+                <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Desglose</h4>
+                <Row label="Fecha" value={fmtFecha(tx.fecha_transaccion)} />
+                <Row label="Monto bruto" value={`$${fmt(Number(tx.monto_bruto))}`} />
+                <Row label="Base receptor (85%)" value={`$${fmt(Number(tx.base_receptor))}`} color="text-amber-700" />
+                <Row label="Comisión NL bruta (15%)" value={`$${fmt(Number(tx.comision_nl_bruta))}`} />
+                <Row label="Comisión NL neta" value={`$${fmt(Number(tx.comision_nl_neta))}`} color="text-indigo-600" />
+                <Row label="IVA comisión" value={`$${fmt(Number(tx.iva_comision))}`} />
+                <Row label="Costo plataforma" value={`-$${fmt(Number(tx.costo_plataforma))}`} color="text-red-500" />
+                <div className="flex justify-between py-2 border-t-2 border-gray-200 mt-1">
+                  <span className="text-xs font-semibold text-gray-700">Margen neto</span>
+                  <span className={`text-sm font-mono font-bold ${margen >= 0 ? "text-green-600" : "text-red-600"}`}>${fmt(margen)}</span>
+                </div>
+              </div>
+
+              {tx.estado === "PAGADO" && (
+                <div>
+                  <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Pago</h4>
+                  <Row label="Fecha pago" value={fmtFecha(tx.fecha_pago)} />
+                  <Row label="Referencia" value={tx.referencia_pago || "—"} />
+                </div>
+              )}
+
+              {tx.boleta_emitida && (
+                <div>
+                  <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Boleta</h4>
+                  <Row label="Folio" value={tx.boleta_folio || "—"} />
+                </div>
+              )}
+
+              {tx.lote_carga && (
+                <p className="text-[11px] text-gray-400">Lote: {tx.lote_carga}</p>
+              )}
+
+              {/* Acciones */}
+              <div className="flex gap-2 pt-2">
+                {tx.estado !== "ANULADO" && (
+                  <button onClick={() => setEditMode(true)}
+                    className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+                    Editar
+                  </button>
+                )}
+                {tx.estado === "PENDIENTE" && (
+                  <button onClick={() => setConfirmarAnular(true)}
+                    className="px-4 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition font-medium">
+                    Anular
+                  </button>
+                )}
+              </div>
+
+              {confirmarAnular && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
+                  <p className="text-sm text-red-700 font-medium">¿Confirmar anulación?</p>
+                  <p className="text-xs text-red-500">Esta acción no se puede deshacer.</p>
+                  <div className="flex gap-2">
+                    <button onClick={onAnular} disabled={isPending}
+                      className="bg-red-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-50">
+                      {isPending ? "Anulando..." : "Sí, anular"}
+                    </button>
+                    <button onClick={() => setConfirmarAnular(false)} className="text-xs text-gray-500 hover:text-gray-700">Cancelar</button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Vista edición */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="text-[11px] text-gray-500 font-medium uppercase">Receptor</label>
+                  <select value={form.receptor_rut}
+                    onChange={(e) => {
+                      const aux = auxiliares.find((a) => a.rut === e.target.value);
+                      setForm((p) => ({ ...p, receptor_rut: e.target.value, receptor_nombre: aux?.nombre || p.receptor_nombre }));
+                    }}
+                    className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value={form.receptor_rut}>{form.receptor_nombre} ({formatRut(form.receptor_rut)})</option>
+                    {auxiliares.filter((a) => a.rut !== form.receptor_rut).map((a) => (
+                      <option key={a.rut} value={a.rut}>{a.nombre} ({formatRut(a.rut)})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-500 font-medium uppercase">Monto bruto</label>
+                  <input type="number" value={form.monto_bruto} onChange={(e) => setForm((p) => ({ ...p, monto_bruto: Number(e.target.value) }))}
+                    className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-500 font-medium uppercase">Fecha</label>
+                  <input type="date" value={form.fecha_transaccion} onChange={(e) => setForm((p) => ({ ...p, fecha_transaccion: e.target.value }))}
+                    className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="text-[11px] text-gray-500 font-medium uppercase">Plataforma</label>
+                  <select value={form.plataforma} onChange={(e) => setForm((p) => ({ ...p, plataforma: e.target.value }))}
+                    className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value="TBK">Transbank</option>
+                    <option value="MP">Mercado Pago</option>
+                  </select>
+                </div>
+                {form.plataforma === "TBK" && (
+                  <div>
+                    <label className="text-[11px] text-gray-500 font-medium uppercase">Tipo tarjeta</label>
+                    <select value={form.card_type} onChange={(e) => setForm((p) => ({ ...p, card_type: e.target.value }))}
+                      className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                      <option value="Visa Débito">Débito</option>
+                      <option value="Visa Crédito">Crédito</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Preview recalculado */}
+              {form.monto_bruto > 0 && (
+                <div className="bg-gray-50 rounded-lg p-3 text-xs space-y-1">
+                  <p className="font-semibold text-gray-600 mb-1">Preview con nuevos valores:</p>
+                  <div className="flex justify-between"><span>Base receptor:</span><span className="font-mono text-amber-700">${fmt(Math.round(form.monto_bruto / 1.15))}</span></div>
+                  <div className="flex justify-between"><span>Comisión NL bruta:</span><span className="font-mono">${fmt(form.monto_bruto - Math.round(form.monto_bruto / 1.15))}</span></div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => onSave(form)} disabled={isPending}
+                  className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+                  {isPending ? "Guardando..." : "Guardar cambios"}
+                </button>
+                <button onClick={() => setEditMode(false)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Cancelar</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
