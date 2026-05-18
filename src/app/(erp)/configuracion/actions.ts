@@ -67,16 +67,17 @@ export async function upsertTipoDocumento(data: {
   origen: string;
 }) {
   const supabase = await createClient();
-  if (data.id) {
+  const { id, ...row } = data;
+  if (id) {
     const { error } = await supabase
       .from("tipos_documento")
-      .update(data)
-      .eq("id", data.id);
+      .update(row)
+      .eq("id", id);
     if (error) return { error: error.message };
   } else {
     const { error } = await supabase
       .from("tipos_documento")
-      .insert(data);
+      .insert(row);
     if (error) return { error: error.message };
   }
   revalidatePath("/configuracion");

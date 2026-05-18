@@ -6,6 +6,7 @@ import { MESES } from "@/lib/contabilidad/core";
 import YearSelector from "@/components/YearSelector";
 import {
   cargarTransacciones,
+  cargarDetalleTBK,
   getTransacciones,
   marcarPagado,
   anularTransaccion,
@@ -517,7 +518,12 @@ export default function MarketplaceClient({
       )}
 
       {/* ═══ TAB: Carga ═══ */}
-      {vista === "Carga" && <CargaPanel auxiliares={auxiliares} onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); setVista("Transacciones"); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />}
+      {vista === "Carga" && (
+        <div className="space-y-4">
+          <CargaPanel auxiliares={auxiliares} onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); refrescarTransacciones(); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />
+          <CargaTBKPanel onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); refrescarTransacciones(); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />
+        </div>
+      )}
 
       {/* Modal pago */}
       {showPagoModal && (
@@ -1025,6 +1031,173 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
               </tbody>
             </table>
             {preview.length > 30 && <div className="px-3 py-2 text-center text-gray-400 text-xs bg-gray-50">... y {preview.length - 30} más</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CargaTBKPanel({ onSuccess, onError }: { onSuccess: (m: string) => void; onError: (m: string) => void }) {
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [preview, setPreview] = useState<Array<{ order_id: string; monto_afecto: number; fecha_abono: string; tipo_tarjeta: string; fecha_venta: string }>>([]);
+  const [cargando, setCargando] = useState(false);
+  const [resultado, setResultado] = useState<{ matched: number; unmatched: number; detalles: Array<{ order_id: string; matched: boolean; orden_id?: string; receptor?: string; monto?: number }> } | null>(null);
+
+  const handleFile = useCallback(async (file: File) => {
+    setArchivo(file);
+    setPreview([]);
+    setResultado(null);
+    try {
+      const XLSX = await import("xlsx");
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+      const items: typeof preview = [];
+      for (let i = 19; i < rows.length; i += 2) {
+        const row = rows[i];
+        if (!row || row.length < 18) continue;
+
+        const orderRaw = String(row[9] ?? "").trim();
+        if (!orderRaw || orderRaw === " " || !orderRaw.includes("ORDER")) continue;
+
+        const montoAfecto = Math.abs(Number(row[13]) || 0);
+        if (montoAfecto === 0) continue;
+
+        const tipoTarjeta = String(row[6] ?? "");
+
+        let fechaVenta = "";
+        const fvRaw = String(row[1] ?? "");
+        if (fvRaw.includes("/")) {
+          const parts = fvRaw.split(" ")[0].split("/");
+          if (parts.length === 3) fechaVenta = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+        }
+
+        let fechaAbono = "";
+        const faRaw = String(row[17] ?? "");
+        if (faRaw.includes("/")) {
+          const parts = faRaw.split("/");
+          if (parts.length === 3) fechaAbono = `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+        }
+        if (!fechaAbono) continue;
+
+        items.push({ order_id: orderRaw, monto_afecto: montoAfecto, fecha_abono: fechaAbono, tipo_tarjeta: tipoTarjeta, fecha_venta: fechaVenta });
+      }
+
+      setPreview(items);
+      if (items.length === 0) onError("No se encontraron transacciones TBK válidas en el archivo");
+    } catch {
+      onError("Error al procesar archivo TBK");
+    }
+  }, [onError]);
+
+  async function handleCargar() {
+    if (preview.length === 0) return;
+    setCargando(true);
+    const result = await cargarDetalleTBK(preview);
+    setCargando(false);
+    if (result.error) { onError(result.error); return; }
+    setResultado(result);
+    onSuccess(`${result.matched} transacciones vinculadas con marketplace, ${result.unmatched} sin match`);
+  }
+
+  const fechasAbono = [...new Set(preview.map((p) => p.fecha_abono))].sort();
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+      <div>
+        <h3 className="text-base font-bold text-gray-900">Cargar Detalle Transbank</h3>
+        <p className="text-sm text-gray-500 mt-1">Sube la cartola de movimientos nativa de Transbank (.xlsx) para vincular ORDER IDs con fechas de abono.</p>
+      </div>
+
+      <div onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); }}
+        onDragOver={(e) => e.preventDefault()}
+        className="border-2 border-dashed border-orange-200 rounded-xl p-8 text-center hover:border-orange-400 transition cursor-pointer bg-orange-50/30"
+        onClick={() => document.getElementById("tbk-file-input")?.click()}>
+        <input id="tbk-file-input" type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
+        <svg className="w-10 h-10 mx-auto text-orange-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+        <p className="mt-2 text-sm text-gray-600">{archivo ? archivo.name : "Arrastra cartola Transbank aquí"}</p>
+        <p className="text-xs text-gray-400 mt-1">Formato nativo Transbank (.xlsx)</p>
+      </div>
+
+      {preview.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="bg-orange-50 text-orange-700 px-3 py-1.5 rounded-lg font-medium">{preview.length} transacciones</span>
+            {fechasAbono.map((f) => {
+              const n = preview.filter((p) => p.fecha_abono === f).length;
+              const total = preview.filter((p) => p.fecha_abono === f).reduce((s, p) => s + p.monto_afecto, 0);
+              return <span key={f} className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg font-medium">Abono {f}: {n} tx (${fmt(total)})</span>;
+            })}
+          </div>
+
+          <div className="overflow-x-auto max-h-60 border rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50">
+                <tr className="text-left text-gray-500">
+                  <th className="px-3 py-2">ORDER ID</th>
+                  <th className="px-3 py-2">Fecha Venta</th>
+                  <th className="px-3 py-2">Tarjeta</th>
+                  <th className="px-3 py-2 text-right">Monto</th>
+                  <th className="px-3 py-2">Fecha Abono</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((p, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-3 py-1.5 font-mono text-orange-700 text-[11px]">{p.order_id.replace(/^0+/, "")}</td>
+                    <td className="px-3 py-1.5">{p.fecha_venta}</td>
+                    <td className="px-3 py-1.5">{p.tipo_tarjeta}</td>
+                    <td className="px-3 py-1.5 text-right font-mono">${fmt(p.monto_afecto)}</td>
+                    <td className="px-3 py-1.5 font-medium text-indigo-600">{p.fecha_abono}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-500">{preview.length} transacciones listas para vincular</span>
+            <button onClick={handleCargar} disabled={cargando} className="bg-orange-600 hover:bg-orange-700 text-white px-5 py-2 rounded-xl text-sm font-medium disabled:opacity-50">
+              {cargando ? "Procesando..." : "Vincular con Marketplace"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {resultado && (
+        <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+          <div className="flex gap-3 text-sm">
+            <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg font-medium">{resultado.matched} vinculados</span>
+            {resultado.unmatched > 0 && <span className="bg-red-50 text-red-700 px-3 py-1 rounded-lg font-medium">{resultado.unmatched} sin match</span>}
+          </div>
+          <div className="overflow-x-auto max-h-48 border rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50">
+                <tr className="text-left text-gray-500">
+                  <th className="px-3 py-2">ORDER ID</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Orden MKT</th>
+                  <th className="px-3 py-2">Receptor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resultado.detalles.map((d, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-3 py-1.5 font-mono text-[11px]">{d.order_id.replace(/^0+/, "")}</td>
+                    <td className="px-3 py-1.5">
+                      {d.matched
+                        ? <span className="text-emerald-600 font-medium">Vinculado</span>
+                        : <span className="text-red-500 font-medium">Sin match</span>}
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-indigo-600">{d.orden_id || "—"}</td>
+                    <td className="px-3 py-1.5">{d.receptor || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

@@ -460,6 +460,58 @@ export async function getRentabilidadPorPlataforma(): Promise<{ data: Rentabilid
   return { data: Object.values(mapa), error: null };
 }
 
+// ─── Carga detalle Transbank ──────────────────────────────────────────
+
+export async function cargarDetalleTBK(items: Array<{
+  order_id: string;
+  monto_afecto: number;
+  fecha_abono: string;
+  tipo_tarjeta: string;
+  fecha_venta: string;
+}>) {
+  await requireRol("comercial");
+  const supabase = await createClient();
+
+  let matched = 0;
+  let unmatched = 0;
+  const detalles: Array<{ order_id: string; matched: boolean; orden_id?: string; receptor?: string; monto?: number }> = [];
+
+  for (const item of items) {
+    const idTbk = item.order_id.replace(/^0+/, "");
+    if (!idTbk || idTbk.trim() === "") {
+      unmatched++;
+      detalles.push({ order_id: item.order_id, matched: false });
+      continue;
+    }
+
+    const { data } = await supabase
+      .from("marketplace_transacciones")
+      .update({
+        fecha_abono_tbk: item.fecha_abono,
+        monto_tbk: item.monto_afecto,
+      })
+      .eq("id_tbk", idTbk)
+      .select("orden_id, receptor_nombre, monto_bruto");
+
+    if (data && data.length > 0) {
+      matched++;
+      detalles.push({
+        order_id: item.order_id,
+        matched: true,
+        orden_id: data[0].orden_id,
+        receptor: data[0].receptor_nombre,
+        monto: Number(data[0].monto_bruto),
+      });
+    } else {
+      unmatched++;
+      detalles.push({ order_id: item.order_id, matched: false });
+    }
+  }
+
+  revalidatePath("/comercial/marketplace");
+  return { matched, unmatched, detalles, error: null };
+}
+
 export async function recalcularCostos() {
   await requireRol("admin");
   const supabase = await createClient();

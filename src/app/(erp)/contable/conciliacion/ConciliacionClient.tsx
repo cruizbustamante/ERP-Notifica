@@ -13,11 +13,17 @@ import {
   cargarCartolaMP,
   previewMatchAutomatico,
   confirmarMatchAutomatico,
+  previewMatchMarketplace,
+  contabilizarMarketplace,
+  previewMatchMarketplaceBulk,
+  confirmarMatchMarketplaceBulk,
   type MovCartola,
   type ContabilizarInput,
   type MatchResult,
   type MatchPreviewItem,
   type MatchDocAlternativo,
+  type MarketplaceMatchPreview,
+  type MarketplaceBulkItem,
   type BancoInfo,
   getSaldosBancos,
 } from "./actions";
@@ -81,6 +87,10 @@ export default function ConciliacionClient({
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
   const [matchPreview, setMatchPreview] = useState<MatchPreviewItem[] | null>(null);
+  const [mktPreview, setMktPreview] = useState<MarketplaceMatchPreview | null>(null);
+  const [mktLoading, setMktLoading] = useState(false);
+  const [mktBulkPreview, setMktBulkPreview] = useState<MarketplaceBulkItem[] | null>(null);
+  const [mktBulkLoading, setMktBulkLoading] = useState(false);
 
   const bancoInfo = bancos.find((b) => b.id === bancoActivo) || bancos[0];
   const stats = saldos[bancoActivo] || { saldo: 0, totalMovs: 0, pendientes: 0, contabilizados: 0, totalAbonos: 0, totalCargos: 0 };
@@ -794,12 +804,128 @@ export default function ConciliacionClient({
                 )}
               </button>
 
+              {bancoActivo === "CTE-SANTANDER" && (
+                <button onClick={() => {
+                  if (!mesActivo) return;
+                  setMktBulkLoading(true);
+                  setMktBulkPreview(null);
+                  startTransition(async () => {
+                    const res = await previewMatchMarketplaceBulk(anio, mesActivo, bancoActivo);
+                    setMktBulkLoading(false);
+                    if (res.error) {
+                      setMensaje({ tipo: "error", texto: res.error });
+                    } else if (res.items.length > 0) {
+                      setMktBulkPreview(res.items);
+                    } else {
+                      setMensaje({ tipo: "ok", texto: "No se encontraron depósitos TBK con match marketplace para este mes" });
+                    }
+                  });
+                }} disabled={isPending || mktBulkLoading || mesStats.pendientes === 0}
+                  className="px-3 py-1.5 bg-orange-600 text-white rounded-lg text-xs font-medium hover:bg-orange-700 disabled:opacity-40 transition-colors whitespace-nowrap flex items-center gap-1.5">
+                  {mktBulkLoading ? (
+                    <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Buscando...</>
+                  ) : (
+                    <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>Match Marketplace</>
+                  )}
+                </button>
+              )}
+
               <button onClick={() => { if (seleccionados.size === 0) return; const pendSel = movimientos.filter((m) => seleccionados.has(m.id) && !m.contabilizado); if (pendSel.length > 0) abrirContabilizar(pendSel[0]); }}
                 disabled={seleccionados.size === 0} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-40 transition-colors whitespace-nowrap">
                 Contabilizar ({seleccionados.size})
               </button>
             </div>
           </div>
+
+          {/* Preview Match Marketplace Bulk */}
+          {mktBulkPreview && mktBulkPreview.length > 0 && (
+            <div className="border border-orange-200 bg-orange-50/30 rounded-xl p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-gray-900">Match Marketplace — {mktBulkPreview.length} depósito{mktBulkPreview.length > 1 ? "s" : ""} TBK</h4>
+                <button onClick={() => setMktBulkPreview(null)} className="text-gray-400 hover:text-gray-600 text-sm">Cerrar</button>
+              </div>
+
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                {mktBulkPreview.map((item) => (
+                  <div key={item.cartola_id} className="bg-white rounded-lg border border-gray-200 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700">TBK</span>
+                        <span className="text-xs text-gray-500">{item.fecha}</span>
+                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium">{item.preview.totales.txCount} tx</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-bold text-sm">${formatMonto(item.monto_cartola)}</span>
+                        {Math.abs(item.diferencia) > 1 && (
+                          <span className="ml-2 text-xs text-amber-600 font-medium">(dif: ${formatMonto(Math.abs(item.diferencia))})</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-gray-500 mb-2 truncate">{item.descripcion}</p>
+
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {item.preview.receptores.map((r) => (
+                        <span key={r.rut} className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                          {r.nombre} <span className="font-mono">${r.base.toLocaleString("es-CL")}</span>
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-gray-400 border-b">
+                            <th className="pb-1 font-medium">Cuenta</th>
+                            <th className="pb-1 font-medium">Auxiliar</th>
+                            <th className="pb-1 font-medium">T.Doc</th>
+                            <th className="pb-1 font-medium">N.Doc</th>
+                            <th className="pb-1 font-medium text-right">Debe</th>
+                            <th className="pb-1 font-medium text-right">Haber</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {item.preview.lineas.map((l, i) => (
+                            <tr key={i} className="border-b last:border-0">
+                              <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span> <span className="text-gray-400">{l.cuenta_nombre}</span></td>
+                              <td className="py-1 font-mono text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : ""}</td>
+                              <td className="py-1 font-mono text-indigo-600">{l.tipo_doc}</td>
+                              <td className="py-1 font-mono text-gray-500 max-w-[80px] truncate" title={l.num_doc}>{l.num_doc}</td>
+                              <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
+                              <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setMktBulkPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">Cancelar</button>
+                <button
+                  onClick={() => {
+                    startTransition(async () => {
+                      const items = mktBulkPreview!.map((i) => ({ cartola_id: i.cartola_id, fecha_abono: i.preview.fecha_abono }));
+                      const res = await confirmarMatchMarketplaceBulk(items, "1.01");
+                      setMktBulkPreview(null);
+                      if (res.total > 0) {
+                        setMensaje({ tipo: "ok", texto: `${res.total} depósito${res.total > 1 ? "s" : ""} TBK contabilizado${res.total > 1 ? "s" : ""} con marketplace` });
+                        if (mesActivo) cargarMovimientos(mesActivo);
+                      } else {
+                        setMensaje({ tipo: "error", texto: "No se pudo contabilizar ningún depósito" });
+                      }
+                    });
+                  }}
+                  disabled={isPending}
+                  className="bg-emerald-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {isPending ? "Contabilizando..." : `Confirmar ${mktBulkPreview.length} asiento${mktBulkPreview.length > 1 ? "s" : ""}`}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Match Result */}
           {matchResult && matchResult.matched > 0 && (
@@ -1049,6 +1175,123 @@ export default function ConciliacionClient({
               </p>
             </div>
           </div>
+
+          {/* Match Marketplace TBK */}
+          {movActivo.cargo_abono === "A" && /transbank|webpay|tbk/i.test(movActivo.descripcion) && (
+            <div className="border border-orange-200 bg-orange-50/50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">TRANSBANK</span>
+                  <span className="text-sm font-medium text-gray-700">Depósito marketplace detectado</span>
+                </div>
+                <button
+                  onClick={() => {
+                    if (!movActivo.fecha) return;
+                    setMktLoading(true);
+                    setMktPreview(null);
+                    startTransition(async () => {
+                      const res = await previewMatchMarketplace(movActivo.fecha!, Math.abs(movActivo.monto));
+                      setMktPreview(res);
+                      setMktLoading(false);
+                    });
+                  }}
+                  disabled={isPending || mktLoading}
+                  className="bg-orange-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {mktLoading ? (
+                    <><svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Buscando...</>
+                  ) : (
+                    <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>Match Marketplace</>
+                  )}
+                </button>
+              </div>
+
+              {mktPreview && mktPreview.error && (
+                <p className="text-sm text-red-600">{mktPreview.error}</p>
+              )}
+
+              {mktPreview && !mktPreview.error && mktPreview.lineas.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="bg-orange-100 text-orange-700 px-2.5 py-1 rounded-lg font-medium">{mktPreview.totales.txCount} transacciones</span>
+                    <span className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-lg font-medium">Bruto: ${mktPreview.totales.bruto.toLocaleString("es-CL")}</span>
+                    <span className="bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-lg font-medium">Depósito neto: ${mktPreview.totales.depositoNeto.toLocaleString("es-CL")}</span>
+                    <span className="bg-red-50 text-red-600 px-2.5 py-1 rounded-lg font-medium">Costo TBK: ${mktPreview.totales.costoPlat.toLocaleString("es-CL")}</span>
+                    <span className="bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg font-medium">Comisión NL: ${mktPreview.totales.comision.toLocaleString("es-CL")}</span>
+                  </div>
+
+                  {mktPreview.receptores.length > 0 && (
+                    <div className="text-xs space-y-1">
+                      <p className="font-semibold text-gray-600 uppercase text-[10px] tracking-wider">Receptores:</p>
+                      {mktPreview.receptores.map((r) => (
+                        <div key={r.rut} className="flex items-center justify-between bg-white rounded-lg px-3 py-1.5 border border-gray-100">
+                          <span><span className="font-mono text-indigo-600">{formatRut(r.rut)}</span> — {r.nombre}</span>
+                          <span className="font-mono font-medium">${r.base.toLocaleString("es-CL")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-gray-400 border-b">
+                          <th className="pb-1 font-medium">Cuenta</th>
+                          <th className="pb-1 font-medium">Glosa</th>
+                          <th className="pb-1 font-medium">Auxiliar</th>
+                          <th className="pb-1 font-medium">T.Doc</th>
+                          <th className="pb-1 font-medium">N.Doc</th>
+                          <th className="pb-1 font-medium text-right">Debe</th>
+                          <th className="pb-1 font-medium text-right">Haber</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mktPreview.lineas.map((l, i) => (
+                          <tr key={i} className="border-b last:border-0">
+                            <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-400 ml-1">— {l.cuenta_nombre}</span>}</td>
+                            <td className="py-1 truncate max-w-[150px]">{l.glosa}</td>
+                            <td className="py-1 font-mono text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : ""}</td>
+                            <td className="py-1 font-mono text-indigo-600">{l.tipo_doc}</td>
+                            <td className="py-1 font-mono text-gray-500 max-w-[100px] truncate" title={l.num_doc}>{l.num_doc}</td>
+                            <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
+                            <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 font-bold">
+                          <td colSpan={5} className="py-1">Total</td>
+                          <td className="py-1 text-right font-mono">{formatMonto(mktPreview.lineas.reduce((s, l) => s + l.debe, 0))}</td>
+                          <td className="py-1 text-right font-mono">{formatMonto(mktPreview.lineas.reduce((s, l) => s + l.haber, 0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button onClick={() => setMktPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">Cancelar</button>
+                    <button
+                      onClick={() => {
+                        startTransition(async () => {
+                          const res = await contabilizarMarketplace(movActivo.id, mktPreview!.fecha_abono, formCategoria || "1.01");
+                          if (res.error) {
+                            setMensaje({ tipo: "error", texto: res.error });
+                          } else {
+                            setMensaje({ tipo: "ok", texto: `Marketplace contabilizado — Comprobante #${res.data?.id}` });
+                            setMktPreview(null);
+                            if (mesActivo) cargarMovimientos(mesActivo);
+                            setVista("movimientos");
+                          }
+                        });
+                      }}
+                      disabled={isPending}
+                      className="bg-emerald-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {isPending ? "Contabilizando..." : "Confirmar asiento"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Tipo</label>

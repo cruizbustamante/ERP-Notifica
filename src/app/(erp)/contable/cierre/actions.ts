@@ -166,28 +166,63 @@ export async function previsualizarApertura(anioOrigen: number): Promise<{ data:
     .eq("comprobantes.anio", anioOrigen)
     .eq("comprobantes.estado", "VIGENTE");
 
-  const { data: cuentas } = await supabase
+  const { data: cuentasAPT } = await supabase
     .from("plan_cuentas")
     .select("codigo, nombre, tipo, nivel, usa_auxiliar")
     .eq("nivel", 4)
     .eq("estado", "S")
     .in("tipo", ["A", "P", "T"]);
 
-  const cuentaMap = new Map((cuentas || []).map((c) => [c.codigo, c]));
+  const { data: cuentasIG } = await supabase
+    .from("plan_cuentas")
+    .select("codigo, tipo")
+    .in("tipo", ["I", "G"]);
 
-  // Group by (cuenta, auxiliar) for accounts with usa_auxiliar, just (cuenta) otherwise
+  const cuentaMap = new Map((cuentasAPT || []).map((c) => [c.codigo, c]));
+  const cuentaTipoIG = new Map((cuentasIG || []).map((c) => [c.codigo, c.tipo]));
+
+  // A/P/T balances grouped by (cuenta, auxiliar)
   const saldos = new Map<string, number>();
+  let totalIngresos = 0;
+  let totalGastos = 0;
+
   for (const m of movs || []) {
-    const cuenta = cuentaMap.get(m.cuenta_codigo);
-    if (!cuenta) continue;
     const debe = Number(m.debe) || 0;
     const haber = Number(m.haber) || 0;
-    const deudor = cuenta.tipo === "A";
-    const saldo = deudor ? debe - haber : haber - debe;
-    const key = cuenta.usa_auxiliar === "X" && m.auxiliar_rut
-      ? `${m.cuenta_codigo}|${m.auxiliar_rut}`
-      : m.cuenta_codigo;
-    saldos.set(key, (saldos.get(key) || 0) + saldo);
+
+    const cuenta = cuentaMap.get(m.cuenta_codigo);
+    if (cuenta) {
+      const deudor = cuenta.tipo === "A";
+      const saldo = deudor ? debe - haber : haber - debe;
+      const key = cuenta.usa_auxiliar === "X" && m.auxiliar_rut
+        ? `${m.cuenta_codigo}|${m.auxiliar_rut}`
+        : m.cuenta_codigo;
+      saldos.set(key, (saldos.get(key) || 0) + saldo);
+    }
+
+    const tipoIG = cuentaTipoIG.get(m.cuenta_codigo);
+    if (tipoIG === "I") totalIngresos += haber - debe;
+    else if (tipoIG === "G") totalGastos += debe - haber;
+  }
+
+  // Excluir cuentas 3-3 (resultado del ejercicio) del traslado directo
+  for (const key of [...saldos.keys()]) {
+    if (key.startsWith("3-3")) saldos.delete(key);
+  }
+
+  // Resultado I-G → Resultados Acumulados
+  const resultado = totalIngresos - totalGastos;
+  const ctaAcum = "3-2-01-001";
+  if (Math.abs(resultado) >= 1) {
+    saldos.set(ctaAcum, (saldos.get(ctaAcum) || 0) + resultado);
+    if (!cuentaMap.has(ctaAcum)) {
+      const { data: ctaRes } = await supabase
+        .from("plan_cuentas")
+        .select("codigo, nombre, tipo, nivel, usa_auxiliar")
+        .eq("codigo", ctaAcum)
+        .single();
+      if (ctaRes) cuentaMap.set(ctaAcum, ctaRes);
+    }
   }
 
   // Fetch auxiliar names for display
@@ -255,10 +290,9 @@ export async function cerrarPeriodo(anio: number) {
   if (!periodo) return { error: "Período no encontrado" };
   if (periodo.estado !== "ABIERTO") return { error: "Período no está abierto" };
 
-  // Verificar que no haya comprobantes pendientes de cuadratura
   const { data: comps } = await supabase
     .from("comprobantes")
-    .select("id, numero, tipo")
+    .select("id")
     .eq("anio", anio)
     .eq("estado", "VIGENTE");
 
@@ -266,86 +300,33 @@ export async function cerrarPeriodo(anio: number) {
     return { error: "No hay comprobantes en el período. No se puede cerrar un período vacío." };
   }
 
-  // Calcular resultado del ejercicio
+  // Calcular resultado del ejercicio (informativo)
   const { data: movs } = await supabase
     .from("mov_contables")
     .select("cuenta_codigo, debe, haber, comprobantes!inner(anio, estado)")
     .eq("comprobantes.anio", anio)
     .eq("comprobantes.estado", "VIGENTE");
 
-  const { data: cuentas } = await supabase
+  const { data: cuentasIG } = await supabase
     .from("plan_cuentas")
     .select("codigo, tipo")
     .in("tipo", ["I", "G"]);
 
-  const cuentasResultado = new Set((cuentas || []).map((c) => c.codigo));
-  const cuentaTipoMap = new Map((cuentas || []).map((c) => [c.codigo, c.tipo]));
-
+  const cuentaTipoMap = new Map((cuentasIG || []).map((c) => [c.codigo, c.tipo]));
   let totalIngresos = 0;
   let totalGastos = 0;
 
   for (const m of movs || []) {
-    if (!cuentasResultado.has(m.cuenta_codigo)) continue;
     const tipo = cuentaTipoMap.get(m.cuenta_codigo);
+    if (!tipo) continue;
     const debe = Number(m.debe) || 0;
     const haber = Number(m.haber) || 0;
-    if (tipo === "I") {
-      totalIngresos += haber - debe;
-    } else if (tipo === "G") {
-      totalGastos += debe - haber;
-    }
+    if (tipo === "I") totalIngresos += haber - debe;
+    else if (tipo === "G") totalGastos += debe - haber;
   }
 
   const resultado = totalIngresos - totalGastos;
 
-  // Crear comprobante de cierre: saldar cuentas I y G contra Resultado del Ejercicio
-  const lineasCierre: { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string }[] = [];
-
-  // Acumular saldos por cuenta
-  const saldosPorCuenta = new Map<string, number>();
-  for (const m of movs || []) {
-    if (!cuentasResultado.has(m.cuenta_codigo)) continue;
-    const debe = Number(m.debe) || 0;
-    const haber = Number(m.haber) || 0;
-    const tipo = cuentaTipoMap.get(m.cuenta_codigo);
-    const saldo = tipo === "G" ? debe - haber : haber - debe;
-    saldosPorCuenta.set(m.cuenta_codigo, (saldosPorCuenta.get(m.cuenta_codigo) || 0) + saldo);
-  }
-
-  for (const [codigo, saldo] of saldosPorCuenta) {
-    if (Math.abs(saldo) < 1) continue;
-    const tipo = cuentaTipoMap.get(codigo);
-    lineasCierre.push({
-      cuenta_codigo: codigo,
-      debe: tipo === "I" ? Math.abs(saldo) : 0,
-      haber: tipo === "G" ? Math.abs(saldo) : 0,
-      glosa: `Cierre ${anio}`,
-      auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
-    });
-  }
-
-  // Línea Resultado del Ejercicio
-  const ctaResultado = "3-3-01-001";
-  if (lineasCierre.length > 0) {
-    lineasCierre.push({
-      cuenta_codigo: ctaResultado,
-      debe: resultado < 0 ? Math.abs(resultado) : 0,
-      haber: resultado > 0 ? resultado : 0,
-      glosa: `Resultado del ejercicio ${anio}`,
-      auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
-    });
-
-    const resCierre = await crearComprobante({
-      tipo: "C",
-      fecha: `${anio}-12-31`,
-      glosa: `CIERRE EJERCICIO ${anio}`,
-      lineas: lineasCierre,
-    });
-
-    if (resCierre.error) return { error: `Error creando comprobante de cierre: ${resCierre.error}` };
-  }
-
-  // Cerrar período
   await supabase
     .from("periodos")
     .update({ estado: "CERRADO", fecha_cierre: `${anio}-12-31` })
@@ -398,28 +379,62 @@ export async function generarApertura(anioOrigen: number) {
     .eq("comprobantes.anio", anioOrigen)
     .eq("comprobantes.estado", "VIGENTE");
 
-  const { data: cuentas } = await supabase
+  const { data: cuentasAPT } = await supabase
     .from("plan_cuentas")
     .select("codigo, tipo, nivel, usa_auxiliar")
     .eq("nivel", 4)
     .eq("estado", "S")
     .in("tipo", ["A", "P", "T"]);
 
-  const cuentaMap = new Map((cuentas || []).map((c) => [c.codigo, c]));
+  const { data: cuentasIG } = await supabase
+    .from("plan_cuentas")
+    .select("codigo, tipo")
+    .in("tipo", ["I", "G"]);
 
-  // Group by (cuenta, auxiliar) for accounts with usa_auxiliar
+  const cuentaMap = new Map((cuentasAPT || []).map((c) => [c.codigo, c]));
+  const cuentaTipoIG = new Map((cuentasIG || []).map((c) => [c.codigo, c.tipo]));
+
   const saldos = new Map<string, number>();
+  let totalIngresos = 0;
+  let totalGastos = 0;
+
   for (const m of movs || []) {
-    const cuenta = cuentaMap.get(m.cuenta_codigo);
-    if (!cuenta) continue;
     const debe = Number(m.debe) || 0;
     const haber = Number(m.haber) || 0;
-    const deudor = cuenta.tipo === "A";
-    const saldo = deudor ? debe - haber : haber - debe;
-    const key = cuenta.usa_auxiliar === "X" && m.auxiliar_rut
-      ? `${m.cuenta_codigo}|${m.auxiliar_rut}`
-      : m.cuenta_codigo;
-    saldos.set(key, (saldos.get(key) || 0) + saldo);
+
+    const cuenta = cuentaMap.get(m.cuenta_codigo);
+    if (cuenta) {
+      const deudor = cuenta.tipo === "A";
+      const saldo = deudor ? debe - haber : haber - debe;
+      const key = cuenta.usa_auxiliar === "X" && m.auxiliar_rut
+        ? `${m.cuenta_codigo}|${m.auxiliar_rut}`
+        : m.cuenta_codigo;
+      saldos.set(key, (saldos.get(key) || 0) + saldo);
+    }
+
+    const tipoIG = cuentaTipoIG.get(m.cuenta_codigo);
+    if (tipoIG === "I") totalIngresos += haber - debe;
+    else if (tipoIG === "G") totalGastos += debe - haber;
+  }
+
+  // Excluir cuentas 3-3 (resultado del ejercicio) del traslado directo
+  for (const key of [...saldos.keys()]) {
+    if (key.startsWith("3-3")) saldos.delete(key);
+  }
+
+  // Resultado I-G → Resultados Acumulados
+  const resultado = totalIngresos - totalGastos;
+  const ctaAcum = "3-2-01-001";
+  if (Math.abs(resultado) >= 1) {
+    saldos.set(ctaAcum, (saldos.get(ctaAcum) || 0) + resultado);
+    if (!cuentaMap.has(ctaAcum)) {
+      const { data: ctaRes } = await supabase
+        .from("plan_cuentas")
+        .select("codigo, tipo, nivel, usa_auxiliar")
+        .eq("codigo", ctaAcum)
+        .single();
+      if (ctaRes) cuentaMap.set(ctaAcum, ctaRes);
+    }
   }
 
   const lineas: { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string }[] = [];
@@ -459,4 +474,55 @@ export async function generarApertura(anioOrigen: number) {
 
   revalidatePath("/contable/cierre");
   return { error: null, comprobante: res.data };
+}
+
+export async function reabrirPeriodo(anio: number) {
+  await requireRol("admin");
+  const supabase = await createClient();
+
+  const { data: periodo } = await supabase
+    .from("periodos")
+    .select("anio, estado")
+    .eq("anio", anio)
+    .single();
+
+  if (!periodo) return { error: "Período no encontrado" };
+  if (periodo.estado !== "CERRADO") return { error: "Solo se puede reabrir un período cerrado" };
+
+  const anioSiguiente = anio + 1;
+
+  // Check if next period is closed — can't reopen if downstream is closed
+  const { data: periodoSig } = await supabase
+    .from("periodos")
+    .select("estado")
+    .eq("anio", anioSiguiente)
+    .single();
+
+  if (periodoSig && periodoSig.estado === "CERRADO") {
+    return { error: `No se puede reabrir ${anio} porque el período ${anioSiguiente} también está cerrado. Reábralo primero.` };
+  }
+
+  // Anular comprobante de apertura del año siguiente (tipo A)
+  const { data: compApertura } = await supabase
+    .from("comprobantes")
+    .select("id")
+    .eq("tipo", "A")
+    .eq("anio", anioSiguiente)
+    .eq("estado", "VIGENTE");
+
+  for (const c of compApertura || []) {
+    await supabase.from("comprobantes").update({ estado: "ANULADO" }).eq("id", c.id);
+  }
+
+  // Reabrir período
+  const { error } = await supabase
+    .from("periodos")
+    .update({ estado: "ABIERTO", fecha_cierre: null })
+    .eq("anio", anio);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/contable/cierre");
+  revalidatePath("/contable/comprobantes");
+  return { error: null, anulados: { apertura: (compApertura || []).length } };
 }

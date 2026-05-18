@@ -7,6 +7,7 @@ import {
   crearPeriodo,
   cerrarPeriodo,
   generarApertura,
+  reabrirPeriodo,
   previsualizarCierre,
   previsualizarApertura,
   type PreviewCierre,
@@ -26,6 +27,7 @@ export default function CierreClient() {
   const [previewCierre, setPreviewCierre] = useState<PreviewCierre | null>(null);
   const [previewApertura, setPreviewApertura] = useState<PreviewApertura | null>(null);
   const [confirmandoCierre, setConfirmandoCierre] = useState<number | null>(null);
+  const [confirmandoReapertura, setConfirmandoReapertura] = useState<number | null>(null);
 
   const cargar = () => {
     startTransition(async () => {
@@ -116,10 +118,26 @@ export default function CierreClient() {
     });
   };
 
+  const handleReapertura = (anio: number) => {
+    startTransition(async () => {
+      const res = await reabrirPeriodo(anio);
+      if (res.error) {
+        setMensaje({ tipo: "error", texto: res.error });
+      } else {
+        const parts: string[] = [`Período ${anio} reabierto exitosamente.`];
+        if (res.anulados?.apertura) parts.push(`Comprobante(s) de apertura ${anio + 1} anulado(s): ${res.anulados.apertura}`);
+        setMensaje({ tipo: "ok", texto: parts.join(" ") });
+        setConfirmandoReapertura(null);
+        cargar();
+      }
+    });
+  };
+
   const cancelarPreview = () => {
     setPreviewCierre(null);
     setPreviewApertura(null);
     setConfirmandoCierre(null);
+    setConfirmandoReapertura(null);
   };
 
   return (
@@ -185,13 +203,40 @@ export default function CierreClient() {
                         </button>
                       )}
                       {p.estado === "CERRADO" && (
-                        <button
-                          onClick={() => handlePreviewApertura(p.anio)}
-                          disabled={isPending}
-                          className="bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-purple-100 disabled:opacity-50 transition-colors"
-                        >
-                          Previsualizar Apertura {p.anio + 1}
-                        </button>
+                        <>
+                          <button
+                            onClick={() => handlePreviewApertura(p.anio)}
+                            disabled={isPending}
+                            className="bg-purple-50 text-purple-700 border border-purple-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-purple-100 disabled:opacity-50 transition-colors"
+                          >
+                            Previsualizar Apertura {p.anio + 1}
+                          </button>
+                          {confirmandoReapertura === p.anio ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleReapertura(p.anio)}
+                                disabled={isPending}
+                                className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                              >
+                                {isPending ? "..." : "Confirmar"}
+                              </button>
+                              <button
+                                onClick={() => setConfirmandoReapertura(null)}
+                                className="bg-white text-gray-600 border border-gray-300 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmandoReapertura(p.anio)}
+                              disabled={isPending}
+                              className="bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                            >
+                              Reabrir Periodo
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
@@ -342,9 +387,8 @@ export default function CierreClient() {
                 <div className="text-sm text-amber-800">
                   <p className="font-medium">Atencion</p>
                   <p className="mt-1">
-                    Al cerrar el ejercicio se creara un comprobante de cierre (tipo C) que saldara todas las
-                    cuentas de resultado. El periodo quedara marcado como CERRADO y no se podran registrar
-                    mas comprobantes en el.
+                    Al cerrar el ejercicio el periodo quedara marcado como CERRADO y no se podran registrar
+                    mas comprobantes en el. El resultado se trasladara al comprobante de apertura del siguiente periodo.
                   </p>
                 </div>
               </div>
@@ -354,7 +398,7 @@ export default function CierreClient() {
           {confirmandoCierre === previewCierre.anio ? (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <p className="text-sm text-red-800 font-medium mb-3">
-                Confirmar cierre del ejercicio {previewCierre.anio}. Esta accion es irreversible.
+                Confirmar cierre del ejercicio {previewCierre.anio}. Puede reabrir el periodo posteriormente si es necesario.
               </p>
               <div className="flex gap-3">
                 <button

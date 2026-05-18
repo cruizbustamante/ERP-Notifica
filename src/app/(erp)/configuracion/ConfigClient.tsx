@@ -562,6 +562,9 @@ function TabTiposDoc({ tiposDoc, isPending, startTransition, showMsg }: {
               <option value="MANUAL">Manual</option>
               <option value="SII">SII</option>
               <option value="SISTEMA">Sistema</option>
+              <option value="MARKETPLACE">Marketplace</option>
+              <option value="CENTRAL">Centralización</option>
+              <option value="TODOS">Todos</option>
             </select>
           </div>
           <div className="flex gap-2 mt-3">

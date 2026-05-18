@@ -566,9 +566,10 @@ async function findMatches(anio: number, mes: number, banco?: string) {
   const ctaClientesBol = config.CUENTA_CLIENTES_BOLETAS || "1-1-03-002";
   const ctaProveedores = config.CUENTA_PROVEEDORES || "2-1-02-001";
   const ctaHonorarios = config.CUENTA_HONORARIOS_PAGAR || "2-1-04-001";
+  const ctaCxpReceptores = config.CUENTA_CXP_RECEPTORES || "2-1-05-003";
 
   const cuentasCXC = [ctaClientes, ctaClientesBol].filter(Boolean);
-  const cuentasCXP = [ctaProveedores, ctaHonorarios].filter(Boolean);
+  const cuentasCXP = [ctaProveedores, ctaHonorarios, ctaCxpReceptores].filter(Boolean);
   const todasCuentasDoc = [...cuentasCXC, ...cuentasCXP];
 
   let cartolaQuery = supabase
@@ -765,6 +766,257 @@ export async function matchAutomatico(anio: number, mes: number, banco?: string)
   if (preview.items.length === 0) return { matched: 0, details: [], error: null };
   const allIds = preview.items.map((i) => i.cartola_id);
   return confirmarMatchAutomatico(anio, mes, allIds, banco);
+}
+
+// ─── Match Marketplace (depósitos TBK) ─────────────────────────────────
+
+export type MarketplaceMatchReceptor = {
+  rut: string;
+  nombre: string;
+  base: number;
+  ordenes: string[];
+};
+
+export type MarketplaceMatchTotales = {
+  bruto: number;
+  base: number;
+  comision: number;
+  costoPlat: number;
+  depositoNeto: number;
+  txCount: number;
+};
+
+export type MarketplaceMatchPreview = {
+  receptores: MarketplaceMatchReceptor[];
+  totales: MarketplaceMatchTotales;
+  fecha_abono: string;
+  lineas: Array<{
+    cuenta_codigo: string;
+    cuenta_nombre: string;
+    debe: number;
+    haber: number;
+    glosa: string;
+    auxiliar_rut: string;
+    tipo_doc: string;
+    num_doc: string;
+  }>;
+  error: string | null;
+};
+
+export async function previewMatchMarketplace(fechaAbono: string, montoCartola?: number): Promise<MarketplaceMatchPreview> {
+  await requireRol("contador");
+  const supabase = await createClient();
+  const config = await getConfig();
+
+  const ctaBanco = config.CUENTA_BANCO || "1-1-01-002";
+  const ctaAntProv = config.CUENTA_ANTICIPO_PROV || "1-1-04-002";
+  const ctaCxpReceptores = config.CUENTA_CXP_RECEPTORES || "2-1-05-003";
+  const ctaAntClientes = config.CUENTA_ANTICIPO_CLIENTES || "2-1-05-002";
+
+  const { data: txs } = await supabase
+    .from("marketplace_transacciones")
+    .select("orden_id, receptor_rut, receptor_nombre, monto_bruto, base_receptor, comision_nl_bruta, costo_plataforma")
+    .eq("fecha_abono_tbk", fechaAbono)
+    .neq("estado", "ANULADO");
+
+  if (!txs || txs.length === 0) {
+    return { receptores: [], totales: { bruto: 0, base: 0, comision: 0, costoPlat: 0, depositoNeto: 0, txCount: 0 }, fecha_abono: fechaAbono, lineas: [], error: "No hay transacciones marketplace para esta fecha de abono" };
+  }
+
+  const porReceptor: Record<string, MarketplaceMatchReceptor> = {};
+  let totalBruto = 0, totalBase = 0, totalComision = 0;
+
+  for (const tx of txs) {
+    const bruto = Number(tx.monto_bruto);
+    const base = Number(tx.base_receptor);
+    const comision = Number(tx.comision_nl_bruta);
+    totalBruto += bruto;
+    totalBase += base;
+    totalComision += comision;
+
+    if (!porReceptor[tx.receptor_rut]) {
+      porReceptor[tx.receptor_rut] = { rut: tx.receptor_rut, nombre: tx.receptor_nombre || tx.receptor_rut, base: 0, ordenes: [] };
+    }
+    porReceptor[tx.receptor_rut].base += base;
+    porReceptor[tx.receptor_rut].ordenes.push(tx.orden_id);
+  }
+
+  const depositoReal = montoCartola ?? (totalBruto - totalComision);
+  const costoTBKReal = totalBruto - depositoReal;
+  const receptores = Object.values(porReceptor);
+
+  const { data: planCtas } = await supabase
+    .from("plan_cuentas")
+    .select("codigo, nombre")
+    .in("codigo", [ctaBanco, ctaAntProv, ctaCxpReceptores, ctaAntClientes]);
+  const nombres: Record<string, string> = {};
+  for (const c of planCtas || []) nombres[c.codigo] = c.nombre || "";
+
+  const lineas: MarketplaceMatchPreview["lineas"] = [];
+
+  lineas.push({
+    cuenta_codigo: ctaBanco, cuenta_nombre: nombres[ctaBanco] || "",
+    debe: depositoReal, haber: 0,
+    glosa: `Depósito TBK ${fechaAbono} (${txs.length} tx)`,
+    auxiliar_rut: "", tipo_doc: "", num_doc: "",
+  });
+
+  if (costoTBKReal > 0) {
+    lineas.push({
+      cuenta_codigo: ctaAntProv, cuenta_nombre: nombres[ctaAntProv] || "",
+      debe: costoTBKReal, haber: 0,
+      glosa: `Anticipo comisión TBK ${fechaAbono}`,
+      auxiliar_rut: "", tipo_doc: "", num_doc: "",
+    });
+  }
+
+  for (const r of receptores) {
+    const docNum = r.ordenes.join(",");
+    lineas.push({
+      cuenta_codigo: ctaCxpReceptores, cuenta_nombre: nombres[ctaCxpReceptores] || "",
+      debe: 0, haber: r.base,
+      glosa: `CxP ${r.nombre}`,
+      auxiliar_rut: r.rut, tipo_doc: "LQ", num_doc: docNum,
+    });
+  }
+
+  lineas.push({
+    cuenta_codigo: ctaAntClientes, cuenta_nombre: nombres[ctaAntClientes] || "",
+    debe: 0, haber: totalComision,
+    glosa: `Anticipo comisión NL ${fechaAbono}`,
+    auxiliar_rut: "", tipo_doc: "", num_doc: "",
+  });
+
+  return {
+    receptores,
+    totales: { bruto: totalBruto, base: totalBase, comision: totalComision, costoPlat: costoTBKReal, depositoNeto: depositoReal, txCount: txs.length },
+    fecha_abono: fechaAbono,
+    lineas,
+    error: null,
+  };
+}
+
+export type MarketplaceBulkItem = {
+  cartola_id: number;
+  fecha: string;
+  monto_cartola: number;
+  descripcion: string;
+  preview: MarketplaceMatchPreview;
+  diferencia: number;
+};
+
+export type MarketplaceBulkPreview = {
+  items: MarketplaceBulkItem[];
+  error: string | null;
+};
+
+export async function previewMatchMarketplaceBulk(anio: number, mes: number, banco?: string): Promise<MarketplaceBulkPreview> {
+  await requireRol("contador");
+  const supabase = await createClient();
+
+  let query = supabase
+    .from("cartolas")
+    .select("id, fecha, monto, cargo_abono, descripcion, cuenta_banco")
+    .eq("anio", anio).eq("mes", mes).eq("contabilizado", false).eq("cargo_abono", "A");
+  if (banco) query = query.eq("cuenta_banco", banco);
+
+  const { data: cartolaRows } = await query;
+  if (!cartolaRows || cartolaRows.length === 0) return { items: [], error: null };
+
+  const tbkMovs = cartolaRows.filter((r) => /transbank|webpay|tbk/i.test(r.descripcion || ""));
+  if (tbkMovs.length === 0) return { items: [], error: null };
+
+  const items: MarketplaceBulkItem[] = [];
+
+  for (const mov of tbkMovs) {
+    if (!mov.fecha) continue;
+    const montoCartola = Math.abs(Number(mov.monto) || 0);
+    const preview = await previewMatchMarketplace(mov.fecha, montoCartola);
+    if (preview.error || preview.lineas.length === 0) continue;
+
+    const diferencia = 0;
+
+    items.push({
+      cartola_id: mov.id,
+      fecha: mov.fecha,
+      monto_cartola: montoCartola,
+      descripcion: mov.descripcion || "",
+      preview,
+      diferencia,
+    });
+  }
+
+  return { items, error: null };
+}
+
+export async function confirmarMatchMarketplaceBulk(
+  items: Array<{ cartola_id: number; fecha_abono: string }>,
+  categoriaFlujo: string
+) {
+  await requireRol("contador");
+  const resultados: Array<{ cartola_id: number; ok: boolean; comprobante_id?: number; error?: string }> = [];
+
+  for (const item of items) {
+    const res = await contabilizarMarketplace(item.cartola_id, item.fecha_abono, categoriaFlujo);
+    resultados.push({
+      cartola_id: item.cartola_id,
+      ok: !res.error,
+      comprobante_id: res.data?.id,
+      error: res.error || undefined,
+    });
+  }
+
+  revalidatePath("/contable/conciliacion");
+  return { resultados, total: resultados.filter((r) => r.ok).length };
+}
+
+export async function contabilizarMarketplace(cartolaId: number, fechaAbono: string, categoriaFlujo: string) {
+  await requireRol("contador");
+  const supabase = await createClient();
+  const config = await getConfig();
+
+  const { data: mov } = await supabase.from("cartolas").select("*").eq("id", cartolaId).single();
+  if (!mov) return { error: "Movimiento no encontrado" };
+  if (mov.contabilizado) return { error: "Ya está contabilizado" };
+
+  const preview = await previewMatchMarketplace(fechaAbono);
+  if (preview.error) return { error: preview.error };
+  if (preview.lineas.length === 0) return { error: "Sin transacciones para contabilizar" };
+
+  const totalDebe = preview.lineas.reduce((s, l) => s + l.debe, 0);
+  const totalHaber = preview.lineas.reduce((s, l) => s + l.haber, 0);
+  if (Math.abs(totalDebe - totalHaber) > 1) return { error: `Asiento descuadrado: Debe ${totalDebe} vs Haber ${totalHaber}` };
+
+  const lineasComp = preview.lineas.map((l, i) => ({
+    cuenta_codigo: l.cuenta_codigo,
+    debe: l.debe,
+    haber: l.haber,
+    glosa: l.glosa,
+    auxiliar_rut: l.auxiliar_rut,
+    tipo_doc: l.tipo_doc,
+    num_doc: l.num_doc,
+    fecha_doc: mov.fecha,
+    tipo_doc_ref: "",
+    num_doc_ref: "",
+    categoria_flujo: i === 0 ? (categoriaFlujo || "1.01") : "",
+  }));
+
+  const result = await crearComprobante({
+    tipo: "I",
+    fecha: mov.fecha,
+    glosa: `Marketplace TBK — ${preview.totales.txCount} tx — ${fechaAbono}`,
+    lineas: lineasComp,
+  });
+
+  if (result.error) return { error: result.error };
+
+  await supabase
+    .from("cartolas")
+    .update({ contabilizado: true, comprobante_id: result.data!.id, categoria_flujo: categoriaFlujo || "1.01" })
+    .eq("id", cartolaId);
+
+  revalidatePath("/contable/conciliacion");
+  return { data: result.data, error: null };
 }
 
 // ─── Documentos pendientes para un auxiliar ─────────────────────────────
