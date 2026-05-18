@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import MarketplaceClient from "./MarketplaceClient";
 
-export default async function MarketplacePage() {
+export default async function MarketplacePage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: transacciones }, { data: receptores }, { data: allTx }] = await Promise.all([
+  const [{ data: transacciones }, { data: receptores }, { data: allTx }, { data: periodos }, { data: auxiliares }] = await Promise.all([
     supabase
       .from("marketplace_transacciones")
       .select("*")
@@ -18,6 +20,8 @@ export default async function MarketplacePage() {
     supabase
       .from("marketplace_transacciones")
       .select("fecha_transaccion, monto_bruto, base_receptor, comision_nl_bruta, comision_nl_neta, iva_comision, costo_plataforma, costo_tbk, plataforma, estado, boleta_emitida, boleta_folio"),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
+    supabase.from("auxiliares").select("rut, razon_social, email").eq("estado", "S").order("razon_social"),
   ]);
 
   const receptoresUnicos = Array.from(
@@ -65,8 +69,10 @@ export default async function MarketplacePage() {
 
   return (
     <MarketplaceClient
+      periodos={periodos || []}
       transaccionesIniciales={transacciones || []}
       receptores={receptoresUnicos}
+      auxiliares={(auxiliares || []).map((a) => ({ rut: a.rut, nombre: a.razon_social, email: a.email || "" }))}
       kpis={kpis}
       anio={anio}
     />

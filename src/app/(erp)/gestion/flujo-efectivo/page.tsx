@@ -1,9 +1,16 @@
 import { createClient } from "@/lib/supabase/server";
 import FlujoEfectivoClient from "./FlujoEfectivoClient";
 
-export default async function FlujoEfectivoPage() {
+export default async function FlujoEfectivoPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
+
+  const { data: periodos } = await supabase
+    .from("periodos")
+    .select("anio, estado")
+    .order("anio", { ascending: false });
 
   const { data: cartolas } = await supabase
     .from("cartolas")
@@ -66,6 +73,7 @@ export default async function FlujoEfectivoPage() {
   return (
     <FlujoEfectivoClient
       anio={anio}
+      periodos={periodos || []}
       categorias={categorias}
       saldoInicial={saldoInicial}
       totalAbonos={totalAbonos}

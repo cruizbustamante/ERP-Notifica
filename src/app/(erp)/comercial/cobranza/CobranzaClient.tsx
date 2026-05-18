@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { formatMonto } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import { enviarCorreoCobranza, enviarCobranzaMasivo, previewCobranzaHtml } from "./actions";
+import YearSelector from "@/components/YearSelector";
 
 type DocPendiente = { tipoDoc: string; numDoc: string; dias: number; saldo: number };
 
@@ -28,6 +29,7 @@ type Props = {
   totalCritico: number;
   anio: number;
   mes: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 const NIVELES = {
@@ -37,7 +39,7 @@ const NIVELES = {
   JUDICIAL: { label: "Judicial (>90d)", bg: "bg-red-50 border-red-200", text: "text-red-700", badge: "bg-red-100 text-red-700", emailNivel: "CRITICO" as const },
 };
 
-export default function CobranzaClient({ clientes, totalDeuda, totalNormal, totalAlerta, totalCritico, anio, mes }: Props) {
+export default function CobranzaClient({ clientes, totalDeuda, totalNormal, totalAlerta, totalCritico, anio, mes, periodos }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
   const [resultado, setResultado] = useState<{ exitosos: number; fallidos: number } | null>(null);
@@ -106,9 +108,12 @@ export default function CobranzaClient({ clientes, totalDeuda, totalNormal, tota
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Cobranza</h1>
-            <p className="text-gray-500 mt-1 text-sm">Gestión de cobranza por niveles de antigüedad</p>
+          <div className="flex items-center gap-4">
+            <div>
+              <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Cobranza</h1>
+              <p className="text-gray-500 mt-1 text-sm">Gestión de cobranza por niveles de antigüedad</p>
+            </div>
+            <YearSelector anio={anio} periodos={periodos} />
           </div>
           {selected.size > 0 && (
             <button

@@ -2,20 +2,23 @@ import { createClient } from "@/lib/supabase/server";
 import { normalizeRut } from "@/lib/rut";
 import ClientesClient from "./ClientesClient";
 
-export default async function ClientesPage() {
+export default async function ClientesPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: auxiliares }, { data: fichas }, { data: ventas }, { data: movsCxC }] = await Promise.all([
-    supabase.from("auxiliares").select("*").eq("estado", "S").order("razon_social"),
+  const [{ data: auxiliares }, { data: fichas }, { data: ventas }, { data: movsCxC }, { data: periodos }] = await Promise.all([
+    supabase.from("auxiliares").select("*").eq("estado", "S").eq("tipo", "CLIENTE").order("razon_social"),
     supabase.from("ficha_comercial").select("*"),
     supabase.from("ventas_sii").select("rut_receptor, monto_total, folio, fecha_emision, tipo_dte").eq("anio", anio),
     supabase
       .from("mov_contables")
-      .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, referencia, comprobantes!inner(estado)")
+      .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
       .eq("cuenta_codigo", "1-1-03-001")
       .eq("comprobantes.estado", "VIGENTE")
       .neq("tipo_doc", ""),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
   ]);
 
   // Ventas por cliente
@@ -148,6 +151,8 @@ export default async function ClientesPage() {
 
   return (
     <ClientesClient
+      anio={anio}
+      periodos={periodos || []}
       clientes={clientes}
       fichas={fichasNormalized}
       totalClientes={clientes.length}

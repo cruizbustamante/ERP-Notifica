@@ -11,10 +11,12 @@ type Cuenta = {
   tipo: string;
   usa_auxiliar: string;
   usa_documento: string;
+  conciliable: string;
 };
 
 type TipoDoc = { codigo: string; nombre: string; abreviatura: string };
 type Auxiliar = { rut: string; razon_social: string };
+type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; flujo: string; orden: number };
 
 type Linea = {
   key: number;
@@ -28,7 +30,10 @@ type Linea = {
   tipo_doc: string;
   num_doc: string;
   fecha_doc: string;
-  referencia: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
+  categoria_flujo: string;
+  es_conciliable: boolean;
   usa_auxiliar: boolean;
   usa_documento: boolean;
   modo_doc: "REGISTRO" | "REBAJA" | "SIN_DOC";
@@ -48,7 +53,9 @@ export type ComprobanteFormData = {
     tipo_doc: string;
     num_doc: string;
     fecha_doc: string | null;
-    referencia: string;
+    tipo_doc_ref: string;
+    num_doc_ref: string;
+    categoria_flujo: string;
   }[];
 };
 
@@ -56,6 +63,7 @@ type Props = {
   cuentas: Cuenta[];
   tiposDoc: TipoDoc[];
   auxiliares: Auxiliar[];
+  categoriasFlujo: CategoriaFlujo[];
   modo: "crear" | "editar";
   initialData?: {
     tipo: string;
@@ -71,7 +79,9 @@ type Props = {
       tipo_doc: string;
       num_doc: string;
       fecha_doc: string | null;
-      referencia: string;
+      tipo_doc_ref: string;
+      num_doc_ref: string;
+      categoria_flujo: string;
     }[];
   };
   onSubmit: (data: ComprobanteFormData) => Promise<{ error: string | null }>;
@@ -83,7 +93,8 @@ function buildLinea(key: number, raw?: Props["initialData"] extends undefined ? 
     return {
       key, cuenta_codigo: "", cuenta_nombre: "", debe: 0, haber: 0,
       glosa: "", auxiliar_rut: "", auxiliar_nombre: "", tipo_doc: "",
-      num_doc: "", fecha_doc: "", referencia: "", usa_auxiliar: false,
+      num_doc: "", fecha_doc: "", tipo_doc_ref: "", num_doc_ref: "",
+      categoria_flujo: "", es_conciliable: false, usa_auxiliar: false,
       usa_documento: false, modo_doc: "SIN_DOC", docs_abiertos: [],
     };
   }
@@ -101,15 +112,18 @@ function buildLinea(key: number, raw?: Props["initialData"] extends undefined ? 
     tipo_doc: raw.tipo_doc || "",
     num_doc: raw.num_doc || "",
     fecha_doc: raw.fecha_doc || "",
-    referencia: raw.referencia || "",
+    tipo_doc_ref: raw.tipo_doc_ref || "",
+    num_doc_ref: raw.num_doc_ref || "",
+    categoria_flujo: raw.categoria_flujo || "",
+    es_conciliable: cuenta?.conciliable === "X",
     usa_auxiliar: cuenta?.usa_auxiliar === "X",
     usa_documento: cuenta?.usa_documento === "X",
-    modo_doc: raw.referencia ? "REBAJA" : (cuenta?.usa_documento === "X" ? "REGISTRO" : "SIN_DOC"),
+    modo_doc: raw.tipo_doc_ref ? "REBAJA" : (cuenta?.usa_documento === "X" ? "REGISTRO" : "SIN_DOC"),
     docs_abiertos: [],
   };
 }
 
-export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, initialData, onSubmit, submitting }: Props) {
+export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, categoriasFlujo, modo, initialData, onSubmit, submitting }: Props) {
   const [tipo, setTipo] = useState(initialData?.tipo || "I");
   const [fecha, setFecha] = useState(initialData?.fecha || new Date().toISOString().slice(0, 10));
   const [glosa, setGlosa] = useState(initialData?.glosa || "");
@@ -143,10 +157,12 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
     updateLinea(key, {
       cuenta_codigo: cuenta.codigo,
       cuenta_nombre: cuenta.nombre,
+      es_conciliable: cuenta.conciliable === "X",
       usa_auxiliar: cuenta.usa_auxiliar === "X",
       usa_documento: cuenta.usa_documento === "X",
       auxiliar_rut: "", auxiliar_nombre: "",
-      tipo_doc: "", num_doc: "", fecha_doc: "", referencia: "",
+      tipo_doc: "", num_doc: "", fecha_doc: "", tipo_doc_ref: "", num_doc_ref: "",
+      categoria_flujo: "",
       modo_doc: cuenta.usa_documento === "X" ? "REGISTRO" : "SIN_DOC",
       docs_abiertos: [],
     });
@@ -162,7 +178,7 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
   }
 
   async function handleModoDoc(linea: Linea, modo: "REGISTRO" | "REBAJA") {
-    updateLinea(linea.key, { modo_doc: modo, referencia: "" });
+    updateLinea(linea.key, { modo_doc: modo, tipo_doc_ref: "", num_doc_ref: "" });
     if (modo === "REBAJA" && linea.cuenta_codigo && linea.auxiliar_rut) {
       const result = await getDocumentosAbiertos(linea.cuenta_codigo, linea.auxiliar_rut);
       updateLinea(linea.key, { docs_abiertos: result.data || [] });
@@ -171,6 +187,9 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
 
   async function handleSubmit() {
     if (!glosa.trim()) { setMessage({ type: "error", text: "Ingrese una glosa" }); return; }
+    if (lineas.some((l) => l.es_conciliable && !l.categoria_flujo)) {
+      setMessage({ type: "error", text: "Líneas con cuenta bancaria requieren categoría de flujo de efectivo" }); return;
+    }
     if (!cuadrado) { setMessage({ type: "error", text: "El comprobante está descuadrado" }); return; }
 
     const result = await onSubmit({
@@ -184,7 +203,9 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
         tipo_doc: l.tipo_doc,
         num_doc: l.num_doc,
         fecha_doc: l.fecha_doc || null,
-        referencia: l.modo_doc === "REBAJA" ? l.referencia : "",
+        tipo_doc_ref: l.modo_doc === "REBAJA" ? l.tipo_doc_ref : "",
+        num_doc_ref: l.modo_doc === "REBAJA" ? l.num_doc_ref : "",
+        categoria_flujo: l.categoria_flujo || "",
       })),
     });
 
@@ -248,6 +269,7 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
               cuentas={cuentas}
               tiposDoc={tiposDoc}
               auxiliares={auxiliares}
+              categoriasFlujo={categoriasFlujo}
               onSelectCuenta={(c) => handleSelectCuenta(linea.key, c)}
               onSelectAuxiliar={(a) => handleSelectAuxiliar(linea.key, a)}
               onUpdate={(patch) => updateLinea(linea.key, patch)}
@@ -288,8 +310,8 @@ export default function ComprobanteForm({ cuentas, tiposDoc, auxiliares, modo, i
 
 /* ─── Línea Row ─── */
 
-function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, onSelectAuxiliar, onUpdate, onModoDoc, onRemove, canRemove }: {
-  linea: Linea; idx: number; cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[];
+function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, categoriasFlujo, onSelectCuenta, onSelectAuxiliar, onUpdate, onModoDoc, onRemove, canRemove }: {
+  linea: Linea; idx: number; cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[]; categoriasFlujo: CategoriaFlujo[];
   onSelectCuenta: (c: Cuenta) => void; onSelectAuxiliar: (a: Auxiliar) => void;
   onUpdate: (patch: Partial<Linea>) => void; onModoDoc: (modo: "REGISTRO" | "REBAJA") => void;
   onRemove: () => void; canRemove: boolean;
@@ -335,7 +357,7 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
             <span className="text-sm font-mono font-medium text-indigo-800">{linea.cuenta_codigo}</span>
             <span className="text-sm text-gray-600 truncate flex-1">{linea.cuenta_nombre}</span>
             <button type="button" onClick={() => {
-              onSelectCuenta({ codigo: "", nombre: "", tipo: "", usa_auxiliar: "", usa_documento: "" });
+              onSelectCuenta({ codigo: "", nombre: "", tipo: "", usa_auxiliar: "", usa_documento: "", conciliable: "" });
               setCuentaSearch("");
             }} className="text-xs text-indigo-500 hover:text-indigo-700 font-medium shrink-0">
               Cambiar
@@ -399,7 +421,7 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
               <span className="text-sm font-mono font-medium text-amber-800">{formatRut(linea.auxiliar_rut)}</span>
               <span className="text-sm text-gray-600 truncate flex-1">{linea.auxiliar_nombre}</span>
               <button type="button" onClick={() => {
-                onUpdate({ auxiliar_rut: "", auxiliar_nombre: "", docs_abiertos: [], referencia: "" });
+                onUpdate({ auxiliar_rut: "", auxiliar_nombre: "", docs_abiertos: [], tipo_doc_ref: "", num_doc_ref: "" });
                 setAuxSearch("");
               }} className="text-xs text-amber-600 hover:text-amber-800 font-medium shrink-0">Cambiar</button>
             </div>
@@ -470,10 +492,10 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">Documento a rebajar</label>
               {linea.docs_abiertos.length > 0 ? (
-                <select value={linea.referencia} onChange={(e) => {
+                <select value={linea.tipo_doc_ref ? `${linea.tipo_doc_ref}|${linea.num_doc_ref}` : ""} onChange={(e) => {
                   const ref = e.target.value;
                   const parts = ref.split("|");
-                  onUpdate({ referencia: ref, tipo_doc: parts[0] || "", num_doc: parts[1] || "" });
+                  onUpdate({ tipo_doc_ref: parts[0] || "", num_doc_ref: parts[1] || "" });
                 }} className="w-full px-2.5 py-2 border border-gray-200 rounded-lg text-xs bg-white text-gray-700 focus:ring-2 focus:ring-orange-500/20 transition">
                   <option value="">Seleccione documento...</option>
                   {linea.docs_abiertos.map((d) => (
@@ -489,6 +511,27 @@ function LineaRow({ linea, idx, cuentas, tiposDoc, auxiliares, onSelectCuenta, o
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Flujo de Efectivo */}
+      {linea.es_conciliable && (
+        <div className="bg-blue-50 rounded-xl p-3 space-y-2.5 border border-blue-100">
+          <label className="block text-[11px] font-semibold text-blue-700 uppercase tracking-wider">Flujo de Efectivo</label>
+          <select value={linea.categoria_flujo} onChange={(e) => onUpdate({ categoria_flujo: e.target.value })}
+            className="w-full px-2.5 py-2 border border-blue-200 rounded-lg text-xs bg-white text-gray-700 focus:ring-2 focus:ring-blue-500/20 transition">
+            <option value="">Seleccione categoría...</option>
+            {(["OPERACIONAL", "INVERSION", "FINANCIAMIENTO"] as const).map((flujo) => {
+              const items = categoriasFlujo.filter((c) => c.flujo === flujo);
+              if (items.length === 0) return null;
+              const labels = { OPERACIONAL: "Operacional", INVERSION: "Inversión", FINANCIAMIENTO: "Financiamiento" };
+              return (
+                <optgroup key={flujo} label={labels[flujo]}>
+                  {items.map((c) => <option key={c.id} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                </optgroup>
+              );
+            })}
+          </select>
         </div>
       )}
     </div>

@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import SituacionClient from "./SituacionClient";
 
-export default async function SituacionFinancieraPage() {
+export default async function SituacionFinancieraPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: movs }, { data: cuentas }] = await Promise.all([
+  const [{ data: movs }, { data: cuentas }, { data: periodos }] = await Promise.all([
     supabase
       .from("mov_contables")
       .select("cuenta_codigo, debe, haber, comprobantes!inner(anio, estado)")
@@ -16,6 +18,10 @@ export default async function SituacionFinancieraPage() {
       .select("codigo, nombre, tipo, nivel")
       .eq("estado", "S")
       .order("codigo"),
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
   ]);
 
   type FilaBG = { codigo: string; nombre: string; tipo: string; nivel: number; saldo: number };
@@ -76,6 +82,7 @@ export default async function SituacionFinancieraPage() {
   return (
     <SituacionClient
       anio={anio}
+      periodos={periodos || []}
       filas={filas}
       totalActivo={totalActivo}
       totalPasivo={totalPasivo}

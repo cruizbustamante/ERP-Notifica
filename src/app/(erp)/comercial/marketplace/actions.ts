@@ -37,6 +37,9 @@ export type TransaccionInput = {
   costo_tbk?: number;
   costo_plataforma?: number;
   plataforma?: string;
+  id_tbk?: string;
+  id_mp?: string;
+  card_type?: string;
 };
 
 function calcularDesglose(monto: number) {
@@ -67,6 +70,9 @@ export async function cargarTransacciones(transacciones: TransaccionInput[]) {
       costo_tbk: t.costo_tbk || 0,
       costo_plataforma: t.costo_plataforma || t.costo_tbk || 0,
       plataforma: t.plataforma || "TBK",
+      id_tbk: t.id_tbk || null,
+      id_mp: t.id_mp || null,
+      card_type: t.card_type || null,
       lote_carga: lote,
     };
   });

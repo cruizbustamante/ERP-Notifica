@@ -15,7 +15,7 @@ import {
   toggleUsuario,
 } from "./actions";
 
-type Categoria = { id: number; codigo: string; nombre: string; tipo: string; orden: number; estado: string };
+type Categoria = { id: number; codigo: string; nombre: string; tipo: string; flujo: string; orden: number; estado: string };
 type TipoDoc = { id: number; codigo: string; nombre: string; abreviatura: string; clasificacion: string; codigo_sii: number; afecto_iva: string; origen: string; estado: string };
 type Plan = { id: number; codigo: string; nombre: string; descripcion: string; valor_base: number; moneda: string; estado: string };
 type Usuario = { id: number; user_id: string; email: string; rol: string; nombre: string; activo: boolean; created_at: string };
@@ -259,6 +259,12 @@ function TabCentralizacion({ config, isPending, startTransition, showMsg }: {
 
 // ─── Tab Categorías Flujo ──────────────────────────────────────────────
 
+const FLUJOS = [
+  { key: "OPERACIONAL", label: "Actividades de Operación", color: "indigo" },
+  { key: "INVERSION", label: "Actividades de Inversión", color: "amber" },
+  { key: "FINANCIAMIENTO", label: "Actividades de Financiamiento", color: "emerald" },
+] as const;
+
 function TabCategorias({ categorias, isPending, startTransition, showMsg }: {
   categorias: Categoria[];
   isPending: boolean;
@@ -268,8 +274,8 @@ function TabCategorias({ categorias, isPending, startTransition, showMsg }: {
   const [editando, setEditando] = useState<Partial<Categoria> | null>(null);
 
   const guardar = () => {
-    if (!editando?.codigo || !editando?.nombre || !editando?.tipo) {
-      showMsg("error", "Código, nombre y tipo son requeridos");
+    if (!editando?.codigo || !editando?.nombre || !editando?.tipo || !editando?.flujo) {
+      showMsg("error", "Código, nombre, tipo y flujo son requeridos");
       return;
     }
     startTransition(async () => {
@@ -278,6 +284,7 @@ function TabCategorias({ categorias, isPending, startTransition, showMsg }: {
         codigo: editando.codigo!,
         nombre: editando.nombre!,
         tipo: editando.tipo!,
+        flujo: editando.flujo!,
         orden: editando.orden || 0,
       });
       if (res.error) showMsg("error", res.error);
@@ -286,82 +293,119 @@ function TabCategorias({ categorias, isPending, startTransition, showMsg }: {
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="font-semibold text-gray-900">Categorías de Flujo de Efectivo (EFE)</h3>
-        <button onClick={() => setEditando({ codigo: "", nombre: "", tipo: "EGRESO", orden: 0 })} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700">
-          + Nueva
-        </button>
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-gray-900">Estado de Flujo de Efectivo (EFE)</h3>
+            <p className="text-xs text-gray-500 mt-0.5">{categorias.filter((c) => c.estado === "S").length} categorías activas</p>
+          </div>
+          <button onClick={() => setEditando({ codigo: "", nombre: "", tipo: "EGRESO", flujo: "OPERACIONAL", orden: 0 })} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700">
+            + Nueva categoría
+          </button>
+        </div>
       </div>
 
       {editando && (
-        <div className="px-4 sm:px-6 py-4 bg-indigo-50 border-b border-indigo-100">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <input value={editando.codigo || ""} onChange={(e) => setEditando((p) => ({ ...p, codigo: e.target.value }))} placeholder="Código" className="border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-            <input value={editando.nombre || ""} onChange={(e) => setEditando((p) => ({ ...p, nombre: e.target.value }))} placeholder="Nombre" className="border border-gray-300 rounded-lg px-3 py-2 text-sm col-span-2 sm:col-span-2" />
-            <select value={editando.tipo || "EGRESO"} onChange={(e) => setEditando((p) => ({ ...p, tipo: e.target.value }))} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-              <option value="INGRESO">Ingreso</option>
-              <option value="EGRESO">Egreso</option>
-            </select>
-            <input type="number" value={editando.orden || 0} onChange={(e) => setEditando((p) => ({ ...p, orden: Number(e.target.value) }))} placeholder="Orden" className="border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        <div className="bg-white rounded-xl border border-indigo-200 shadow-sm p-4 sm:p-6">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">{editando.id ? "Editar categoría" : "Nueva categoría"}</h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Código</label>
+              <input value={editando.codigo || ""} onChange={(e) => setEditando((p) => ({ ...p, codigo: e.target.value }))} placeholder="1.01" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono" />
+            </div>
+            <div className="col-span-2 sm:col-span-2">
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Nombre</label>
+              <input value={editando.nombre || ""} onChange={(e) => setEditando((p) => ({ ...p, nombre: e.target.value }))} placeholder="Cobranza clientes" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Flujo</label>
+              <select value={editando.flujo || "OPERACIONAL"} onChange={(e) => setEditando((p) => ({ ...p, flujo: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                {FLUJOS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Tipo</label>
+              <select value={editando.tipo || "EGRESO"} onChange={(e) => setEditando((p) => ({ ...p, tipo: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                <option value="INGRESO">Ingreso</option>
+                <option value="EGRESO">Egreso</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Orden</label>
+              <input type="number" value={editando.orden || 0} onChange={(e) => setEditando((p) => ({ ...p, orden: Number(e.target.value) }))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
           </div>
-          <div className="flex gap-2 mt-3">
-            <button onClick={guardar} disabled={isPending} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50">
-              {isPending ? "..." : "Guardar"}
+          <div className="flex gap-2 mt-4">
+            <button onClick={guardar} disabled={isPending} className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+              {isPending ? "Guardando..." : "Guardar"}
             </button>
-            <button onClick={() => setEditando(null)} className="text-gray-500 hover:text-gray-700 px-4 py-1.5 text-xs">Cancelar</button>
+            <button onClick={() => setEditando(null)} className="text-gray-500 hover:text-gray-700 px-4 py-2 text-sm">Cancelar</button>
           </div>
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
-              <th className="px-4 py-2.5 text-left font-medium">Código</th>
-              <th className="px-4 py-2.5 text-left font-medium">Nombre</th>
-              <th className="px-4 py-2.5 text-center font-medium">Tipo</th>
-              <th className="px-4 py-2.5 text-center font-medium">Orden</th>
-              <th className="px-4 py-2.5 text-center font-medium">Estado</th>
-              <th className="px-4 py-2.5 text-center font-medium">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {categorias.map((c) => (
-              <tr key={c.id} className={`hover:bg-gray-50 ${c.estado !== "S" ? "opacity-40" : ""}`}>
-                <td className="px-4 py-2 font-mono text-xs text-indigo-600">{c.codigo}</td>
-                <td className="px-4 py-2 text-gray-900">{c.nombre}</td>
-                <td className="px-4 py-2 text-center">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.tipo === "INGRESO" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                    {c.tipo}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-center text-gray-500">{c.orden}</td>
-                <td className="px-4 py-2 text-center">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.estado === "S" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
-                    {c.estado === "S" ? "Activo" : "Inactivo"}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-center">
-                  <div className="flex items-center justify-center gap-1">
-                    <button onClick={() => setEditando(c)} className="px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 rounded">Editar</button>
-                    <button
-                      onClick={() => startTransition(async () => {
-                        const res = await toggleCategoriaFlujo(c.id, c.estado);
-                        if (res.error) showMsg("error", res.error);
-                        else showMsg("ok", c.estado === "S" ? "Desactivada" : "Activada");
-                      })}
-                      className={`px-2 py-1 text-xs rounded ${c.estado === "S" ? "text-red-600 hover:bg-red-50" : "text-emerald-600 hover:bg-emerald-50"}`}
-                    >
-                      {c.estado === "S" ? "Desactivar" : "Activar"}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {FLUJOS.map((flujo) => {
+        const items = categorias.filter((c) => c.flujo === flujo.key);
+        if (items.length === 0) return null;
+        const colorMap = { indigo: "border-indigo-200 bg-indigo-50", amber: "border-amber-200 bg-amber-50", emerald: "border-emerald-200 bg-emerald-50" };
+        const headerColor = colorMap[flujo.color];
+        return (
+          <div key={flujo.key} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className={`px-4 sm:px-6 py-3 border-b ${headerColor}`}>
+              <h4 className="text-sm font-semibold text-gray-800">{flujo.label}</h4>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
+                    <th className="px-4 py-2.5 text-left font-medium w-20">Código</th>
+                    <th className="px-4 py-2.5 text-left font-medium">Nombre</th>
+                    <th className="px-4 py-2.5 text-center font-medium w-24">Tipo</th>
+                    <th className="px-4 py-2.5 text-center font-medium w-16">Orden</th>
+                    <th className="px-4 py-2.5 text-center font-medium w-20">Estado</th>
+                    <th className="px-4 py-2.5 text-center font-medium w-32">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {items.map((c) => (
+                    <tr key={c.id} className={`hover:bg-gray-50 transition-colors ${c.estado !== "S" ? "opacity-40" : ""}`}>
+                      <td className="px-4 py-2.5 font-mono text-xs text-indigo-700 font-semibold">{c.codigo}</td>
+                      <td className="px-4 py-2.5 text-gray-900">{c.nombre}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${c.tipo === "INGRESO" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                          {c.tipo}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center text-xs text-gray-400">{c.orden}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${c.estado === "S" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
+                          {c.estado === "S" ? "Activo" : "Inactivo"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => setEditando(c)} className="px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 rounded transition">Editar</button>
+                          <button
+                            onClick={() => startTransition(async () => {
+                              const res = await toggleCategoriaFlujo(c.id, c.estado);
+                              if (res.error) showMsg("error", res.error);
+                              else showMsg("ok", c.estado === "S" ? "Desactivada" : "Activada");
+                            })}
+                            className={`px-2 py-1 text-xs rounded transition ${c.estado === "S" ? "text-red-600 hover:bg-red-50" : "text-emerald-600 hover:bg-emerald-50"}`}
+                          >
+                            {c.estado === "S" ? "Desactivar" : "Activar"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

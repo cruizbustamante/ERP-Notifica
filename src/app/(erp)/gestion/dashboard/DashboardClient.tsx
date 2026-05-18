@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import YearSelector from "@/components/YearSelector";
 
 type SaldoBanco = { nombre: string; saldo: number; pendientes: number };
 
@@ -18,6 +19,7 @@ type Props = {
   cartolaPend: { cant: number; abonos: number; cargos: number };
   saldosBanco: SaldoBanco[];
   saldoConsolidado: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
@@ -56,8 +58,13 @@ export default function DashboardClient(props: Props) {
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard Ejecutivo</h1>
-        <p className="text-gray-500 mt-1">Indicadores clave — {props.anio}</p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Dashboard Ejecutivo</h1>
+            <p className="text-gray-500 mt-1">Indicadores clave — {props.anio}</p>
+          </div>
+          <YearSelector anio={props.anio} periodos={props.periodos} />
+        </div>
       </div>
 
       {/* Saldos bancarios */}

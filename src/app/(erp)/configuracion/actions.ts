@@ -24,23 +24,21 @@ export async function upsertCategoriaFlujo(data: {
   codigo: string;
   nombre: string;
   tipo: string;
+  flujo: string;
   orden: number;
 }) {
   const supabase = await createClient();
+  const row = { codigo: data.codigo, nombre: data.nombre, tipo: data.tipo, flujo: data.flujo, orden: data.orden };
   if (data.id) {
-    const { error } = await supabase
-      .from("categoria_flujo")
-      .update({ codigo: data.codigo, nombre: data.nombre, tipo: data.tipo, orden: data.orden })
-      .eq("id", data.id);
+    const { error } = await supabase.from("categoria_flujo").update(row).eq("id", data.id);
     if (error) return { error: error.message };
   } else {
-    const { error } = await supabase
-      .from("categoria_flujo")
-      .insert({ codigo: data.codigo, nombre: data.nombre, tipo: data.tipo, orden: data.orden });
+    const { error } = await supabase.from("categoria_flujo").insert(row);
     if (error) return { error: error.message };
   }
   revalidatePath("/configuracion");
   revalidatePath("/contable/conciliacion");
+  revalidatePath("/contable/comprobantes");
   return { error: null };
 }
 

@@ -924,7 +924,7 @@ export default function CentralizacionClient({
                       <tbody>
                         {preview.lineas.map((l, i) => (
                           <tr key={i} className="border-b last:border-0 hover:bg-white/60">
-                            <td className="py-1.5 font-mono text-xs font-medium">{l.cuenta_codigo}</td>
+                            <td className="py-1.5 text-xs font-medium"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-500 ml-1">— {l.cuenta_nombre}</span>}</td>
                             <td className="py-1.5 text-xs truncate max-w-[220px]">{l.glosa}</td>
                             <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
                             <td className="py-1.5 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
@@ -1056,7 +1056,7 @@ export default function CentralizacionClient({
                       <tbody>
                         {preview.lineas.map((l, i) => (
                           <tr key={i} className="border-b last:border-0 hover:bg-white/60">
-                            <td className="py-1.5 font-mono text-xs font-medium">{l.cuenta_codigo}</td>
+                            <td className="py-1.5 text-xs font-medium"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-500 ml-1">— {l.cuenta_nombre}</span>}</td>
                             <td className="py-1.5 text-xs truncate max-w-[220px]">{l.glosa}</td>
                             <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
                             <td className="py-1.5 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
@@ -1180,7 +1180,7 @@ export default function CentralizacionClient({
                       <tbody>
                         {preview.lineas.map((l, i) => (
                           <tr key={i} className="border-b last:border-0 hover:bg-white/60">
-                            <td className="py-1.5 font-mono text-xs font-medium">{l.cuenta_codigo}</td>
+                            <td className="py-1.5 text-xs font-medium"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-500 ml-1">— {l.cuenta_nombre}</span>}</td>
                             <td className="py-1.5 text-xs truncate max-w-[220px]">{l.glosa}</td>
                             <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
                             <td className="py-1.5 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>

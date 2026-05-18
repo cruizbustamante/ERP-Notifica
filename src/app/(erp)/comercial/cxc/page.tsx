@@ -15,7 +15,7 @@ export default async function CuentasPorCobrarPage() {
 
   const { data: movs } = await supabase
     .from("mov_contables")
-    .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, fecha_doc, referencia, comprobantes!inner(estado)")
+    .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, fecha_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
     .eq("cuenta_codigo", ctaCxC)
     .eq("comprobantes.estado", "VIGENTE")
     .neq("tipo_doc", "");
@@ -29,8 +29,9 @@ export default async function CuentasPorCobrarPage() {
   for (const m of movs || []) {
     if (!m.auxiliar_rut) continue;
     const docKey = `${m.auxiliar_rut}|${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia ? `${m.auxiliar_rut}|${m.referencia}` : docKey;
-    const isReg = !m.referencia || m.referencia === `${m.tipo_doc}|${m.num_doc}`;
+    const hasRef = m.tipo_doc_ref && m.num_doc_ref;
+    const refKey = hasRef ? `${m.auxiliar_rut}|${m.tipo_doc_ref}|${m.num_doc_ref}` : docKey;
+    const isReg = !hasRef;
     const monto = (Number(m.debe) || 0) - (Number(m.haber) || 0);
     const key = isReg ? docKey : refKey;
     const existing = saldos.get(key);

@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import EstadoResultadosClient from "./EstadoResultadosClient";
 
-export default async function EstadoResultadosPage() {
+export default async function EstadoResultadosPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: movs }, { data: cuentas }] = await Promise.all([
+  const [{ data: movs }, { data: cuentas }, { data: periodos }] = await Promise.all([
     supabase
       .from("mov_contables")
       .select("cuenta_codigo, debe, haber, comprobantes!inner(anio, mes, estado)")
@@ -17,6 +19,10 @@ export default async function EstadoResultadosPage() {
       .eq("estado", "S")
       .in("tipo", ["I", "G"])
       .order("codigo"),
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
   ]);
 
   type FilaEERR = { codigo: string; nombre: string; tipo: string; nivel: number; porMes: number[]; total: number };
@@ -71,6 +77,7 @@ export default async function EstadoResultadosPage() {
   return (
     <EstadoResultadosClient
       anio={anio}
+      periodos={periodos || []}
       filas={filas}
       totalIngresos={totalIngresos}
       totalGastos={totalGastos}

@@ -2,9 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import DashboardClient from "./DashboardClient";
 import { getBancos } from "../../contable/conciliacion/actions";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
   const mes = new Date().getMonth() + 1;
   const bancos = await getBancos();
 
@@ -15,6 +17,7 @@ export default async function DashboardPage() {
     { data: cartola },
     { data: cuentas },
     { data: allCartolas },
+    { data: periodos },
   ] = await Promise.all([
     supabase
       .from("mov_contables")
@@ -41,6 +44,10 @@ export default async function DashboardPage() {
     supabase
       .from("cartolas")
       .select("monto, cargo_abono, cuenta_banco"),
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
   ]);
 
   const cuentaTipoMap: Record<string, string> = {};
@@ -126,6 +133,7 @@ export default async function DashboardPage() {
     <DashboardClient
       anio={anio}
       mes={mes}
+      periodos={periodos || []}
       ingresosPorMes={ingresosPorMes}
       gastosPorMes={gastosPorMes}
       ventasPorMes={ventasPorMes}

@@ -4,11 +4,11 @@ import NuevoComprobanteClient from "./NuevoComprobanteClient";
 export default async function NuevoComprobantePage() {
   const supabase = await createClient();
 
-  const [{ data: cuentas }, { data: tiposDoc }, { data: auxiliares }] =
+  const [{ data: cuentas }, { data: tiposDoc }, { data: auxiliares }, { data: categoriasFlujo }] =
     await Promise.all([
       supabase
         .from("plan_cuentas")
-        .select("codigo, nombre, tipo, usa_auxiliar, usa_documento")
+        .select("codigo, nombre, tipo, usa_auxiliar, usa_documento, conciliable")
         .eq("nivel", 4)
         .eq("estado", "S")
         .order("codigo"),
@@ -22,6 +22,11 @@ export default async function NuevoComprobantePage() {
         .select("rut, razon_social")
         .eq("estado", "S")
         .order("razon_social"),
+      supabase
+        .from("categoria_flujo")
+        .select("id, codigo, nombre, tipo, flujo, orden")
+        .eq("estado", "S")
+        .order("orden"),
     ]);
 
   return (
@@ -29,6 +34,7 @@ export default async function NuevoComprobantePage() {
       cuentas={cuentas || []}
       tiposDoc={tiposDoc || []}
       auxiliares={auxiliares || []}
+      categoriasFlujo={categoriasFlujo || []}
     />
   );
 }

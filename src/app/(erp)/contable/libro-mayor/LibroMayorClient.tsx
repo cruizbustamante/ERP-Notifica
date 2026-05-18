@@ -50,11 +50,15 @@ export default function LibroMayorClient({
           codigo: c.cuenta_codigo,
           nombre: c.cuenta_nombre,
           saldoAnterior: c.saldo_anterior,
-          movimientos: c.movimientos.map((m) => ({
-            fecha: m.fecha, comprobante: m.comprobante, auxiliar: m.auxiliar_rut,
-            documento: m.tipo_doc ? `${m.tipo_doc} ${m.num_doc}` : "",
-            debe: m.debe, haber: m.haber, saldo: m.saldo, glosa: m.glosa,
-          })),
+          movimientos: c.movimientos.map((m) => {
+              return {
+              fecha: m.fecha, comprobante: m.comprobante, auxiliar: m.auxiliar_rut,
+              tipo_doc: m.tipo_doc || "", num_doc: m.num_doc || "",
+              tipo_doc_ref: m.tipo_doc_ref || "", num_doc_ref: m.num_doc_ref || "",
+              documento: m.tipo_doc ? `${m.tipo_doc} ${m.num_doc}` : "",
+              debe: m.debe, haber: m.haber, saldo: m.saldo, glosa: m.glosa,
+            };
+          }),
           totalDebe: c.total_debe,
           totalHaber: c.total_haber,
           saldoFinal: c.saldo_final,
@@ -157,7 +161,7 @@ export default function LibroMayorClient({
                 <span className="ml-2 text-xs px-2 py-0.5 rounded bg-gray-200">{result.cuenta_tipo === "A" ? "Activo" : result.cuenta_tipo === "P" ? "Pasivo" : result.cuenta_tipo === "I" ? "Ingreso" : result.cuenta_tipo === "G" ? "Gasto" : "Patrimonio"}</span>
               </div>
               <div className="text-right text-sm">
-                <div>Saldo anterior: <span className="font-mono font-medium">{formatMonto(result.saldo_anterior)}</span></div>
+                <div>{["1", "2", "3"].includes(result.cuenta_codigo.charAt(0)) ? "Saldo inicial" : "Saldo anterior"}: <span className="font-mono font-medium">{formatMonto(result.saldo_anterior)}</span></div>
                 <div>Saldo final: <span className="font-mono font-bold text-lg">{formatMonto(result.saldo_final)}</span></div>
               </div>
             </div>
@@ -171,7 +175,9 @@ export default function LibroMayorClient({
                   <th className="px-4 py-2 font-medium">Fecha</th>
                   <th className="px-4 py-2 font-medium">Comp.</th>
                   <th className="px-4 py-2 font-medium">Auxiliar</th>
-                  <th className="px-4 py-2 font-medium">Doc</th>
+                  <th className="px-4 py-2 font-medium">Tipo</th>
+                  <th className="px-4 py-2 font-medium">N° Doc</th>
+                  <th className="px-4 py-2 font-medium">Ref</th>
                   <th className="px-4 py-2 font-medium text-right">Debe</th>
                   <th className="px-4 py-2 font-medium text-right">Haber</th>
                   <th className="px-4 py-2 font-medium text-right">Saldo</th>
@@ -179,33 +185,46 @@ export default function LibroMayorClient({
                 </tr>
               </thead>
               <tbody>
-                {/* Saldo anterior */}
-                {result.saldo_anterior !== 0 && (
-                  <tr className="border-b bg-blue-50">
-                    <td colSpan={4} className="px-4 py-2 font-medium text-blue-700">Saldo anterior</td>
-                    <td className="px-4 py-2 text-right font-mono"></td>
-                    <td className="px-4 py-2 text-right font-mono"></td>
-                    <td className="px-4 py-2 text-right font-mono font-medium text-blue-700">{formatMonto(result.saldo_anterior)}</td>
-                    <td className="px-4 py-2"></td>
-                  </tr>
-                )}
+                {/* Saldo inicial / anterior */}
+                {(() => {
+                  const esBalanceCuenta = ["1", "2", "3"].includes(result.cuenta_codigo.charAt(0));
+                  if (esBalanceCuenta || result.saldo_anterior !== 0) {
+                    return (
+                      <tr className="border-b bg-blue-50">
+                        <td colSpan={6} className="px-4 py-2 font-medium text-blue-700">
+                          {esBalanceCuenta ? "Saldo inicial" : "Saldo anterior"}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono"></td>
+                        <td className="px-4 py-2 text-right font-mono"></td>
+                        <td className="px-4 py-2 text-right font-mono font-medium text-blue-700">{formatMonto(result.saldo_anterior)}</td>
+                        <td className="px-4 py-2"></td>
+                      </tr>
+                    );
+                  }
+                  return null;
+                })()}
 
-                {result.movimientos.map((m, i) => (
-                  <tr key={i} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-1.5 whitespace-nowrap">{m.fecha}</td>
-                    <td className="px-4 py-1.5 font-mono text-xs">{m.comprobante}</td>
-                    <td className="px-4 py-1.5 font-mono text-xs">{formatRut(m.auxiliar_rut)}</td>
-                    <td className="px-4 py-1.5 text-xs">{m.tipo_doc && `${m.tipo_doc} ${m.num_doc}`}</td>
-                    <td className="px-4 py-1.5 text-right font-mono">{m.debe > 0 ? formatMonto(m.debe) : ""}</td>
-                    <td className="px-4 py-1.5 text-right font-mono">{m.haber > 0 ? formatMonto(m.haber) : ""}</td>
-                    <td className="px-4 py-1.5 text-right font-mono font-medium">{formatMonto(m.saldo)}</td>
-                    <td className="px-4 py-1.5 truncate max-w-[250px] text-gray-600">{m.glosa}</td>
-                  </tr>
-                ))}
+                {result.movimientos.map((m, i) => {
+                  const refDisplay = m.tipo_doc_ref ? `${m.tipo_doc_ref} ${m.num_doc_ref}` : "";
+                  return (
+                    <tr key={i} className="border-b hover:bg-gray-50">
+                      <td className="px-4 py-1.5 whitespace-nowrap">{m.fecha}</td>
+                      <td className="px-4 py-1.5 font-mono text-xs">{m.comprobante}</td>
+                      <td className="px-4 py-1.5 font-mono text-xs">{formatRut(m.auxiliar_rut)}</td>
+                      <td className="px-4 py-1.5 text-xs">{m.tipo_doc || ""}</td>
+                      <td className="px-4 py-1.5 text-xs">{m.num_doc || ""}</td>
+                      <td className="px-4 py-1.5 text-xs">{refDisplay || "—"}</td>
+                      <td className="px-4 py-1.5 text-right font-mono">{m.debe > 0 ? formatMonto(m.debe) : ""}</td>
+                      <td className="px-4 py-1.5 text-right font-mono">{m.haber > 0 ? formatMonto(m.haber) : ""}</td>
+                      <td className="px-4 py-1.5 text-right font-mono font-medium">{formatMonto(m.saldo)}</td>
+                      <td className="px-4 py-1.5 truncate max-w-[250px] text-gray-600">{m.glosa}</td>
+                    </tr>
+                  );
+                })}
 
                 {/* Totales */}
                 <tr className="border-t-2 border-gray-300 bg-gray-50 font-medium">
-                  <td colSpan={4} className="px-4 py-2">Totales</td>
+                  <td colSpan={6} className="px-4 py-2">Totales</td>
                   <td className="px-4 py-2 text-right font-mono">{formatMonto(result.total_debe)}</td>
                   <td className="px-4 py-2 text-right font-mono">{formatMonto(result.total_haber)}</td>
                   <td className="px-4 py-2 text-right font-mono font-bold">{formatMonto(result.saldo_final)}</td>

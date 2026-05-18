@@ -11,6 +11,7 @@ import {
   previsualizarApertura,
   type PreviewCierre,
   type PreviewApertura,
+  type PreviewAperturaLinea,
 } from "./actions";
 
 type PeriodoRow = { anio: number; estado: string };
@@ -429,21 +430,27 @@ export default function CierreClient() {
                   <tr className="text-gray-500 border-b bg-gray-100">
                     <th className="px-3 py-2 text-left font-medium">Codigo</th>
                     <th className="px-3 py-2 text-left font-medium">Nombre</th>
+                    <th className="px-3 py-2 text-left font-medium">Auxiliar</th>
                     <th className="px-3 py-2 text-center font-medium">Tipo</th>
                     <th className="px-3 py-2 text-right font-medium">Debe</th>
                     <th className="px-3 py-2 text-right font-medium">Haber</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {previewApertura.cuentas.map((c) => {
+                  {previewApertura.cuentas.map((c, i) => {
                     const deudor = c.tipo === "A";
                     const debe = deudor ? (c.saldo >= 0 ? c.saldo : 0) : (c.saldo < 0 ? Math.abs(c.saldo) : 0);
                     const haber = deudor ? (c.saldo < 0 ? Math.abs(c.saldo) : 0) : (c.saldo >= 0 ? c.saldo : 0);
                     const tipoLabel = c.tipo === "A" ? "Activo" : c.tipo === "P" ? "Pasivo" : "Patrimonio";
                     return (
-                      <tr key={c.codigo} className="border-b last:border-0">
+                      <tr key={`${c.codigo}-${c.auxiliar_rut}-${i}`} className="border-b last:border-0">
                         <td className="px-3 py-2 font-mono text-gray-600">{c.codigo}</td>
                         <td className="px-3 py-2 text-gray-800">{c.nombre}</td>
+                        <td className="px-3 py-2 text-gray-600 text-xs">
+                          {c.auxiliar_nombre && (
+                            <span title={c.auxiliar_rut}>{c.auxiliar_nombre}</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-center">
                           <span
                             className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
@@ -470,7 +477,7 @@ export default function CierreClient() {
               </table>
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              {previewApertura.cuentas.length} cuentas con saldo a trasladar
+              {previewApertura.cuentas.length} lineas con saldo a trasladar
             </p>
           </div>
 

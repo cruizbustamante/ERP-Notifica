@@ -2,6 +2,7 @@
 
 import { formatMonto } from "@/lib/contabilidad/core";
 import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
+import YearSelector from "@/components/YearSelector";
 
 type FilaBG = { codigo: string; nombre: string; tipo: string; nivel: number; saldo: number };
 
@@ -33,7 +34,7 @@ function SeccionBalance({ titulo, items, total, totalLabel, color }: {
 }
 
 export default function SituacionClient({
-  anio, filas, totalActivo, totalPasivo, totalPatrimonio, resultadoEjercicio,
+  anio, filas, totalActivo, totalPasivo, totalPatrimonio, resultadoEjercicio, periodos,
 }: {
   anio: number;
   filas: FilaBG[];
@@ -41,6 +42,7 @@ export default function SituacionClient({
   totalPasivo: number;
   totalPatrimonio: number;
   resultadoEjercicio: number;
+  periodos: { anio: number; estado: string }[];
 }) {
   const activos = filas.filter((f) => f.tipo === "A");
   const pasivos = filas.filter((f) => f.tipo === "P");
@@ -100,9 +102,12 @@ export default function SituacionClient({
             <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Situacion Financiera</h1>
             <p className="text-gray-500 mt-1 text-sm">Balance General Clasificado al 31/12/{anio}</p>
           </div>
-          <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 self-start">
-            Descargar Excel
-          </button>
+          <div className="flex items-center gap-2 self-start">
+            <YearSelector anio={anio} periodos={periodos} />
+            <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
+              Descargar Excel
+            </button>
+          </div>
         </div>
       </div>
 

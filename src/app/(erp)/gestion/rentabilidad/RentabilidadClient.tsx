@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
+import YearSelector from "@/components/YearSelector";
 
 type GrupoGasto = {
   codigo: string;
@@ -16,9 +17,10 @@ type Props = {
   totalIngresos: number;
   totalGastos: number;
   grupos: GrupoGasto[];
+  periodos: { anio: number; estado: string }[];
 };
 
-export default function RentabilidadClient({ anio, ingresosPorMes, gastosPorMes, totalIngresos, totalGastos, grupos }: Props) {
+export default function RentabilidadClient({ anio, ingresosPorMes, gastosPorMes, totalIngresos, totalGastos, grupos, periodos }: Props) {
   const resultado = totalIngresos - totalGastos;
   const margenPorMes = ingresosPorMes.map((ing, i) => {
     const gas = gastosPorMes[i];
@@ -32,8 +34,13 @@ export default function RentabilidadClient({ anio, ingresosPorMes, gastosPorMes,
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Rentabilidad</h1>
-        <p className="text-gray-500 mt-1">Análisis de márgenes — {anio}</p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Rentabilidad</h1>
+            <p className="text-gray-500 mt-1">Análisis de márgenes — {anio}</p>
+          </div>
+          <YearSelector anio={anio} periodos={periodos} />
+        </div>
       </div>
 
       {/* KPIs */}

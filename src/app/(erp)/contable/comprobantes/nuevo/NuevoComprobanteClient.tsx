@@ -6,13 +6,14 @@ import Link from "next/link";
 import ComprobanteForm, { ComprobanteFormData } from "../ComprobanteForm";
 import { crearComprobante } from "../actions";
 
-type Cuenta = { codigo: string; nombre: string; tipo: string; usa_auxiliar: string; usa_documento: string };
+type Cuenta = { codigo: string; nombre: string; tipo: string; usa_auxiliar: string; usa_documento: string; conciliable: string };
 type TipoDoc = { codigo: string; nombre: string; abreviatura: string };
 type Auxiliar = { rut: string; razon_social: string };
+type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; flujo: string; orden: number };
 
-type Props = { cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[] };
+type Props = { cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[]; categoriasFlujo: CategoriaFlujo[] };
 
-export default function NuevoComprobanteClient({ cuentas, tiposDoc, auxiliares }: Props) {
+export default function NuevoComprobanteClient({ cuentas, tiposDoc, auxiliares, categoriasFlujo }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -60,6 +61,7 @@ export default function NuevoComprobanteClient({ cuentas, tiposDoc, auxiliares }
         cuentas={cuentas}
         tiposDoc={tiposDoc}
         auxiliares={auxiliares}
+        categoriasFlujo={categoriasFlujo}
         modo="crear"
         onSubmit={handleSubmit}
         submitting={isPending}

@@ -6,11 +6,18 @@ import { revalidatePath } from "next/cache";
 import { normalizeRut } from "@/lib/rut";
 import { requireRol } from "@/lib/auth";
 
-const MAPA_DTE: Record<number, string> = {
+const MAPA_DTE_VENTA: Record<number, string> = {
   33: "FAC", 34: "FEX", 39: "BV", 41: "BVE",
   46: "FC", 48: "VT", 52: "GD", 56: "ND", 61: "NC",
   110: "FEX", 111: "NCE", 112: "NDE",
 };
+
+const MAPA_DTE_COMPRA: Record<number, string> = {
+  33: "FACC", 34: "FEXC", 56: "NDC", 61: "NCC",
+  110: "FEXC", 111: "NCC", 112: "NDC",
+};
+
+const MAPA_DTE: Record<number, string> = MAPA_DTE_VENTA;
 
 const DTES_NOTA_CREDITO = [61, 111];
 const DTES_NOTA_DEBITO = [56, 112];
@@ -121,8 +128,20 @@ export async function upsertRegla(data: {
     const { error } = await supabase.from("reglas_centralizacion").update(data).eq("id", data.id);
     if (error) return { error: error.message };
   } else {
-    const { error } = await supabase.from("reglas_centralizacion").insert(data);
-    if (error) return { error: error.message };
+    const { data: existing } = await supabase
+      .from("reglas_centralizacion")
+      .select("id")
+      .eq("tipo", data.tipo)
+      .eq("rut", data.rut)
+      .eq("estado", "N")
+      .maybeSingle();
+    if (existing) {
+      const { error } = await supabase.from("reglas_centralizacion").update({ ...data, estado: "S" }).eq("id", existing.id);
+      if (error) return { error: error.message };
+    } else {
+      const { error } = await supabase.from("reglas_centralizacion").insert({ ...data, estado: "S" });
+      if (error) return { error: error.message };
+    }
   }
   revalidatePath("/contable/centralizacion");
   return { error: null };
@@ -281,20 +300,21 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
     const isNC = esNC(dte);
     const isND = esND(dte);
 
+    const dteMap = tipo === "compras" ? MAPA_DTE_COMPRA : MAPA_DTE_VENTA;
     let refTipo = "";
     let refFolio = "";
     if ((isNC || isND) && r.tipo_doc_ref && r.folio_doc_ref) {
-      refTipo = MAPA_DTE[r.tipo_doc_ref] || String(r.tipo_doc_ref);
+      refTipo = dteMap[r.tipo_doc_ref] || MAPA_DTE_VENTA[r.tipo_doc_ref] || String(r.tipo_doc_ref);
       refFolio = r.folio_doc_ref;
     } else if (isNC && r.folio_doc_ref && !r.tipo_doc_ref) {
-      refTipo = "FAC";
+      refTipo = tipo === "compras" ? "FACC" : "FAC";
       refFolio = r.folio_doc_ref;
     }
 
     return {
       id: r.id,
       tipo_dte: dte,
-      tipo_dte_nombre: r.tipo_dte_nombre || MAPA_DTE[dte] || String(dte),
+      tipo_dte_nombre: r.tipo_dte_nombre || dteMap[dte] || MAPA_DTE_VENTA[dte] || String(dte),
       folio: r.folio || "",
       rut: normalizeRut(tipo === "ventas" ? (r.rut_receptor || "") : (r.rut_emisor || "")),
       razon_social: r.razon_social || "",
@@ -334,6 +354,7 @@ export async function getDocumentosPendientes(tipo: TipoLibro, anio: number, mes
 
 export type LineaPreview = {
   cuenta_codigo: string;
+  cuenta_nombre: string;
   debe: number;
   haber: number;
   glosa: string;
@@ -360,7 +381,7 @@ export async function previsualizarCentralizacion(
   type LineaComp = {
     cuenta_codigo: string; debe: number; haber: number; glosa: string;
     auxiliar_rut: string; tipo_doc: string; num_doc: string;
-    fecha_doc: string | null; referencia: string;
+    fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string;
   };
 
   let lineas: LineaComp[];
@@ -389,8 +410,14 @@ export async function previsualizarCentralizacion(
   let totalDebe = 0, totalHaber = 0;
   for (const l of lineas) { totalDebe += l.debe; totalHaber += l.haber; }
 
+  const supabase = await createClient();
+  const codigosUnicos = [...new Set(lineas.map((l) => l.cuenta_codigo))];
+  const { data: cuentasData } = await supabase.from("plan_cuentas").select("codigo, nombre").in("codigo", codigosUnicos);
+  const nombresMap = new Map((cuentasData || []).map((c: { codigo: string; nombre: string }) => [c.codigo, c.nombre]));
+
   const preview: LineaPreview[] = lineas.map((l) => ({
     cuenta_codigo: l.cuenta_codigo,
+    cuenta_nombre: nombresMap.get(l.cuenta_codigo) || "",
     debe: l.debe,
     haber: l.haber,
     glosa: l.glosa,
@@ -425,7 +452,7 @@ export async function centralizarDocumentos(
   type LineaComp = {
     cuenta_codigo: string; debe: number; haber: number; glosa: string;
     auxiliar_rut: string; tipo_doc: string; num_doc: string;
-    fecha_doc: string | null; referencia: string;
+    fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string;
   };
 
   let lineas: LineaComp[];
@@ -886,62 +913,53 @@ function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: R
   const ctaIVADebito = config.CENT_CTA_IVA_DEBITO || "2-1-06-001";
   const ctaVentasDefault = cuentaVentas || config.CENT_CTA_VENTAS || "4-1-01-001";
 
-  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
+  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string };
   const lineas: Linea[] = [];
-  let totalIVA = 0;
-  const ventasPorCuenta = new Map<string, number>();
 
   for (const doc of docs) {
     const isNC = doc.esNC;
     const montoTotal = Math.round(Math.abs(doc.monto_total));
     const montoNeto = Math.round(Math.abs(doc.monto_neto));
     const montoIVA = Math.round(Math.abs(doc.monto_iva));
+    const glosa = `${doc.razon_social} ${doc.tipo_dte_nombre} ${doc.folio}`;
 
-    let referencia = "";
+    let tipo_doc_ref = "";
+    let num_doc_ref = "";
     if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio) {
-      referencia = `${doc.ref_tipo}|${doc.ref_folio}`;
+      tipo_doc_ref = doc.ref_tipo;
+      num_doc_ref = doc.ref_folio;
     }
 
-    // Línea individual por documento (cuenta clientes)
     lineas.push({
       cuenta_codigo: ctaClientes,
       debe: isNC ? 0 : montoTotal,
       haber: isNC ? montoTotal : 0,
-      glosa: `${doc.razon_social} ${doc.tipo_dte_nombre} ${doc.folio}`,
+      glosa,
       auxiliar_rut: doc.rut,
       tipo_doc: doc.tipo_dte_nombre,
       num_doc: doc.folio,
       fecha_doc: doc.fecha_emision,
-      referencia,
+      tipo_doc_ref, num_doc_ref, categoria_flujo: "",
     });
 
-    // Acumular neto por cuenta (regla específica o default)
     const ctaVenta = reglasMap.get(doc.rut) || ctaVentasDefault;
-    const signo = isNC ? -1 : 1;
-    ventasPorCuenta.set(ctaVenta, (ventasPorCuenta.get(ctaVenta) || 0) + montoNeto * signo);
-    totalIVA += montoIVA * signo;
-  }
-
-  // Línea resumen IVA Débito
-  if (totalIVA !== 0) {
-    lineas.push({
-      cuenta_codigo: ctaIVADebito,
-      debe: totalIVA < 0 ? Math.abs(totalIVA) : 0,
-      haber: totalIVA > 0 ? totalIVA : 0,
-      glosa: "IVA Débito Fiscal",
-      auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
-    });
-  }
-
-  // Líneas resumen Ventas (una por cuenta)
-  for (const [cuenta, neto] of ventasPorCuenta) {
-    if (neto !== 0) {
+    if (montoNeto !== 0) {
       lineas.push({
-        cuenta_codigo: cuenta,
-        debe: neto < 0 ? Math.abs(neto) : 0,
-        haber: neto > 0 ? neto : 0,
-        glosa: "Ventas",
-        auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
+        cuenta_codigo: ctaVenta,
+        debe: isNC ? montoNeto : 0,
+        haber: isNC ? 0 : montoNeto,
+        glosa,
+        auxiliar_rut: "", tipo_doc: doc.tipo_dte_nombre, num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
+      });
+    }
+
+    if (montoIVA !== 0) {
+      lineas.push({
+        cuenta_codigo: ctaIVADebito,
+        debe: isNC ? montoIVA : 0,
+        haber: isNC ? 0 : montoIVA,
+        glosa,
+        auxiliar_rut: "", tipo_doc: doc.tipo_dte_nombre, num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
       });
     }
   }
@@ -954,62 +972,56 @@ function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: R
   const ctaIVACredito = config.CENT_CTA_IVA_CREDITO || "1-1-07-002";
   const ctaGastoDefault = cuentaGasto || config.CENT_CTA_GASTOS || "5-1-01-001";
 
-  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
+  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string };
   const lineas: Linea[] = [];
-  let totalIVA = 0;
-  const gastosPorCuenta = new Map<string, number>();
 
   for (const doc of docs) {
     const isNC = doc.esNC;
     const montoTotal = Math.round(Math.abs(doc.monto_total));
     const montoNeto = Math.round(Math.abs(doc.monto_neto));
     const montoIVA = Math.round(Math.abs(doc.monto_iva));
+    const tipoDocCompra = MAPA_DTE_COMPRA[doc.tipo_dte] || doc.tipo_dte_nombre;
+    const glosa = `${doc.razon_social} ${tipoDocCompra} ${doc.folio}`;
 
-    let referencia = "";
+    let tipo_doc_ref = "";
+    let num_doc_ref = "";
     if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio) {
-      referencia = `${doc.ref_tipo}|${doc.ref_folio}`;
+      tipo_doc_ref = doc.ref_tipo;
+      num_doc_ref = doc.ref_folio;
     }
 
     lineas.push({
       cuenta_codigo: ctaProveedores,
       debe: isNC ? montoTotal : 0,
       haber: isNC ? 0 : montoTotal,
-      glosa: `${doc.razon_social} ${doc.tipo_dte_nombre} ${doc.folio}`,
+      glosa,
       auxiliar_rut: doc.rut,
-      tipo_doc: doc.tipo_dte_nombre,
+      tipo_doc: tipoDocCompra,
       num_doc: doc.folio,
       fecha_doc: doc.fecha_emision,
-      referencia,
+      tipo_doc_ref, num_doc_ref, categoria_flujo: "",
     });
 
     const ctaGasto = cuentasPorDoc?.[doc.id] || reglasMap.get(doc.rut) || ctaGastoDefault;
-    const signo = isNC ? -1 : 1;
-    gastosPorCuenta.set(ctaGasto, (gastosPorCuenta.get(ctaGasto) || 0) + montoNeto * signo);
-    totalIVA += montoIVA * signo;
-  }
-
-  // Líneas resumen Gastos (una por cuenta)
-  for (const [cuenta, neto] of gastosPorCuenta) {
-    if (neto !== 0) {
+    if (montoNeto !== 0) {
       lineas.push({
-        cuenta_codigo: cuenta,
-        debe: neto > 0 ? neto : 0,
-        haber: neto < 0 ? Math.abs(neto) : 0,
-        glosa: "Gastos",
-        auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
+        cuenta_codigo: ctaGasto,
+        debe: isNC ? 0 : montoNeto,
+        haber: isNC ? montoNeto : 0,
+        glosa,
+        auxiliar_rut: "", tipo_doc: tipoDocCompra, num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
       });
     }
-  }
 
-  // IVA Crédito
-  if (totalIVA !== 0) {
-    lineas.push({
-      cuenta_codigo: ctaIVACredito,
-      debe: totalIVA > 0 ? totalIVA : 0,
-      haber: totalIVA < 0 ? Math.abs(totalIVA) : 0,
-      glosa: "IVA Crédito Fiscal",
-      auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
-    });
+    if (montoIVA !== 0) {
+      lineas.push({
+        cuenta_codigo: ctaIVACredito,
+        debe: isNC ? 0 : montoIVA,
+        haber: isNC ? montoIVA : 0,
+        glosa,
+        auxiliar_rut: "", tipo_doc: tipoDocCompra, num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
+      });
+    }
   }
 
   return lineas;
@@ -1020,57 +1032,47 @@ function buildLineasHonorarios(docs: DocHonorario[], cuentaGasto: string, config
   const ctaRetencion = config.CENT_CTA_RETENCION || "2-1-07-001";
   const ctaHonPagar = config.CENT_CTA_HONORARIOS_PAGAR || "2-1-04-001";
 
-  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
+  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string };
   const lineas: Linea[] = [];
-  const gastosPorCuenta = new Map<string, number>();
-  let totalRetencion = 0;
 
   for (const doc of docs) {
     const bruto = Math.round(Math.abs(doc.monto_bruto));
     const retencion = Math.round(Math.abs(doc.retencion));
     const liquido = Math.round(Math.abs(doc.monto_liquido));
+    const glosa = `${doc.razon_social} BH ${doc.folio}`;
 
-    // Línea individual: Honorarios por pagar (al prestador)
     lineas.push({
       cuenta_codigo: ctaHonPagar,
       debe: 0,
       haber: liquido,
-      glosa: `${doc.razon_social} BH ${doc.folio}`,
+      glosa,
       auxiliar_rut: doc.rut,
       tipo_doc: "BH",
       num_doc: doc.folio,
       fecha_doc: doc.fecha_emision,
-      referencia: "",
+      tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
     });
 
-    // Acumular gasto por cuenta (regla o default)
     const ctaGasto = reglasMap.get(doc.rut) || ctaGastoDefault;
-    gastosPorCuenta.set(ctaGasto, (gastosPorCuenta.get(ctaGasto) || 0) + bruto);
-    totalRetencion += retencion;
-  }
-
-  // Líneas resumen Gasto Honorarios (una por cuenta)
-  for (const [cuenta, total] of gastosPorCuenta) {
-    if (total !== 0) {
+    if (bruto !== 0) {
       lineas.push({
-        cuenta_codigo: cuenta,
-        debe: total,
+        cuenta_codigo: ctaGasto,
+        debe: bruto,
         haber: 0,
-        glosa: "Gasto Honorarios",
-        auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
+        glosa,
+        auxiliar_rut: "", tipo_doc: "BH", num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
       });
     }
-  }
 
-  // Retención Honorarios (resumen)
-  if (totalRetencion !== 0) {
-    lineas.push({
-      cuenta_codigo: ctaRetencion,
-      debe: 0,
-      haber: totalRetencion,
-      glosa: "Retención Honorarios",
-      auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, referencia: "",
-    });
+    if (retencion !== 0) {
+      lineas.push({
+        cuenta_codigo: ctaRetencion,
+        debe: 0,
+        haber: retencion,
+        glosa,
+        auxiliar_rut: "", tipo_doc: "BH", num_doc: doc.folio, fecha_doc: doc.fecha_emision, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
+      });
+    }
   }
 
   return lineas;
@@ -1082,7 +1084,7 @@ function buildLineasTransbank(docs: DocTransbank[], config: Record<string, strin
   const ctaIVA = config.CENT_CTA_TRANSBANK_IVA || "1-1-07-002";
   const ctaVentas = config.CENT_CTA_TRANSBANK_VENTAS || "4-1-01-001";
 
-  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string };
+  type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string };
   const lineas: Linea[] = [];
   let totalNeto = 0;
   let totalComision = 0;
@@ -1103,7 +1105,7 @@ function buildLineasTransbank(docs: DocTransbank[], config: Record<string, strin
       debe: totalNeto,
       haber: 0,
       glosa: "Depósito Transbank",
-      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
     });
   }
 
@@ -1114,7 +1116,7 @@ function buildLineasTransbank(docs: DocTransbank[], config: Record<string, strin
       debe: totalComision,
       haber: 0,
       glosa: "Comisión Transbank",
-      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
     });
   }
 
@@ -1125,7 +1127,7 @@ function buildLineasTransbank(docs: DocTransbank[], config: Record<string, strin
       debe: totalIVA,
       haber: 0,
       glosa: "IVA Crédito Fiscal Comisión Transbank",
-      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
     });
   }
 
@@ -1136,7 +1138,7 @@ function buildLineasTransbank(docs: DocTransbank[], config: Record<string, strin
       debe: 0,
       haber: totalBruto,
       glosa: "Ventas Transbank",
-      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, referencia: "",
+      auxiliar_rut: "", tipo_doc: "TB", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: "",
     });
   }
 

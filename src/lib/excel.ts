@@ -174,7 +174,10 @@ export function crearLibroMayorCorporativo(opts: {
     { key: "fecha", header: "Fecha", width: 12 },
     { key: "comprobante", header: "Comp.", width: 12 },
     { key: "auxiliar", header: "Auxiliar", width: 14 },
-    { key: "documento", header: "Documento", width: 14 },
+    { key: "tipo_doc", header: "Tipo Doc", width: 10 },
+    { key: "num_doc", header: "N° Doc", width: 12 },
+    { key: "tipo_doc_ref", header: "Tipo Ref", width: 10 },
+    { key: "num_doc_ref", header: "N° Ref", width: 12 },
     { key: "debe", header: "Debe", width: 16 },
     { key: "haber", header: "Haber", width: 16 },
     { key: "saldo", header: "Saldo", width: 16 },
@@ -216,7 +219,7 @@ export function crearLibroMayorCorporativo(opts: {
     cell.value = col.header;
     cell.font = FONT_SUBHEADER;
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_SUBHEADER } };
-    cell.alignment = { horizontal: i >= 6 ? "right" : "left", vertical: "middle" };
+    cell.alignment = { horizontal: i >= 9 ? "right" : "left", vertical: "middle" };
     cell.border = {
       top: { style: "medium", color: { argb: "FF1F3864" } },
       bottom: { style: "medium", color: { argb: "FF1F3864" } },
@@ -232,17 +235,18 @@ export function crearLibroMayorCorporativo(opts: {
   const rightAlign: Partial<ExcelJS.Alignment> = { horizontal: "right", vertical: "middle" };
 
   for (const cuenta of opts.cuentas) {
-    // Saldo anterior row
-    if (cuenta.saldoAnterior !== 0) {
+    // Saldo anterior / inicial row
+    const esBalanceCuenta = ["1", "2", "3"].includes(cuenta.codigo.charAt(0));
+    if (esBalanceCuenta || cuenta.saldoAnterior !== 0) {
       const r = ws.getRow(rowIdx);
       r.getCell(1).value = cuenta.codigo;
       r.getCell(2).value = cuenta.nombre;
-      r.getCell(7).value = "";
-      r.getCell(8).value = "";
-      r.getCell(9).value = cuenta.saldoAnterior;
-      r.getCell(9).numFmt = MONEY_FMT;
-      r.getCell(9).alignment = rightAlign;
-      r.getCell(10).value = "SALDO ANTERIOR";
+      r.getCell(9).value = "";
+      r.getCell(10).value = "";
+      r.getCell(11).value = cuenta.saldoAnterior;
+      r.getCell(11).numFmt = MONEY_FMT;
+      r.getCell(11).alignment = rightAlign;
+      r.getCell(12).value = esBalanceCuenta ? "SALDO INICIAL" : "SALDO ANTERIOR";
       for (let ci = 1; ci <= totalCols; ci++) {
         const cell = r.getCell(ci);
         cell.font = { name: "Calibri", size: 10, italic: true, color: { argb: "FF4472C4" } };
@@ -262,17 +266,20 @@ export function crearLibroMayorCorporativo(opts: {
       r.getCell(3).value = m.fecha as string;
       r.getCell(4).value = m.comprobante as string;
       r.getCell(5).value = m.auxiliar as string;
-      r.getCell(6).value = m.documento as string;
-      r.getCell(7).value = (m.debe as number) || "";
-      r.getCell(8).value = (m.haber as number) || "";
-      r.getCell(9).value = m.saldo as number;
-      r.getCell(10).value = m.glosa as string;
+      r.getCell(6).value = m.tipo_doc as string;
+      r.getCell(7).value = m.num_doc as string;
+      r.getCell(8).value = m.tipo_doc_ref as string;
+      r.getCell(9).value = m.num_doc_ref as string;
+      r.getCell(10).value = (m.debe as number) || "";
+      r.getCell(11).value = (m.haber as number) || "";
+      r.getCell(12).value = m.saldo as number;
+      r.getCell(13).value = m.glosa as string;
 
       for (let ci = 1; ci <= totalCols; ci++) {
         const cell = r.getCell(ci);
         cell.font = FONT_NORMAL;
         cell.border = BORDER_THIN;
-        if (ci >= 7) { cell.alignment = rightAlign; cell.numFmt = MONEY_FMT; }
+        if (ci >= 10) { cell.alignment = rightAlign; cell.numFmt = MONEY_FMT; }
         if (altToggle % 2 === 1) {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F7FA" } };
         }
@@ -286,10 +293,10 @@ export function crearLibroMayorCorporativo(opts: {
     const tr = ws.getRow(rowIdx);
     tr.getCell(1).value = cuenta.codigo;
     tr.getCell(2).value = cuenta.nombre;
-    tr.getCell(6).value = "TOTALES";
-    tr.getCell(7).value = cuenta.totalDebe;
-    tr.getCell(8).value = cuenta.totalHaber;
-    tr.getCell(9).value = cuenta.saldoFinal;
+    tr.getCell(9).value = "TOTALES";
+    tr.getCell(10).value = cuenta.totalDebe;
+    tr.getCell(11).value = cuenta.totalHaber;
+    tr.getCell(12).value = cuenta.saldoFinal;
     for (let ci = 1; ci <= totalCols; ci++) {
       const cell = tr.getCell(ci);
       cell.font = FONT_TOTALES;
@@ -300,7 +307,7 @@ export function crearLibroMayorCorporativo(opts: {
         left: { style: "thin", color: { argb: "FF8FAADC" } },
         right: { style: "thin", color: { argb: "FF8FAADC" } },
       };
-      if (ci >= 7) { cell.alignment = rightAlign; cell.numFmt = MONEY_FMT; }
+      if (ci >= 10) { cell.alignment = rightAlign; cell.numFmt = MONEY_FMT; }
     }
     tr.height = 22;
     rowIdx++;

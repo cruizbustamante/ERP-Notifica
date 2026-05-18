@@ -2,6 +2,7 @@
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
+import YearSelector from "@/components/YearSelector";
 
 type CategoriaFlujo = {
   categoria: string;
@@ -15,6 +16,7 @@ type Props = {
   saldoInicial: number;
   totalAbonos: number;
   totalCargos: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 const COLORES: Record<string, string> = {
@@ -24,7 +26,7 @@ const COLORES: Record<string, string> = {
   "SIN CLASIFICAR": "text-gray-500",
 };
 
-export default function FlujoEfectivoClient({ anio, categorias, saldoInicial, totalAbonos, totalCargos }: Props) {
+export default function FlujoEfectivoClient({ anio, categorias, saldoInicial, totalAbonos, totalCargos, periodos }: Props) {
   const flujoNeto = totalAbonos - totalCargos;
   const saldoFinal = saldoInicial + flujoNeto;
   const mesLabels = MESES.slice(1);
@@ -95,9 +97,12 @@ export default function FlujoEfectivoClient({ anio, categorias, saldoInicial, to
             <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Flujo de Efectivo</h1>
             <p className="text-gray-500 mt-1 text-sm">Movimiento de caja — {anio}</p>
           </div>
-          <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 self-start">
-            Descargar Excel
-          </button>
+          <div className="flex items-center gap-2 self-start">
+            <YearSelector anio={anio} periodos={periodos} />
+            <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
+              Descargar Excel
+            </button>
+          </div>
         </div>
       </div>
 

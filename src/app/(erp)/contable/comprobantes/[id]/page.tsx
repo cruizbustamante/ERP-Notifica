@@ -14,7 +14,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   if (!comp) redirect("/contable/comprobantes");
 
-  const [{ data: movs }, { data: cuentas }, { data: tiposDoc }, { data: auxiliares }] =
+  const [{ data: movs }, { data: cuentas }, { data: tiposDoc }, { data: auxiliares }, { data: categoriasFlujo }] =
     await Promise.all([
       supabase
         .from("mov_contables")
@@ -23,7 +23,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         .order("linea"),
       supabase
         .from("plan_cuentas")
-        .select("codigo, nombre, tipo, nivel, usa_auxiliar, usa_documento")
+        .select("codigo, nombre, tipo, nivel, usa_auxiliar, usa_documento, conciliable")
         .eq("estado", "S")
         .eq("nivel", 4)
         .order("codigo"),
@@ -37,6 +37,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         .select("rut, razon_social")
         .eq("estado", "S")
         .order("razon_social"),
+      supabase
+        .from("categoria_flujo")
+        .select("id, codigo, nombre, tipo, flujo, orden")
+        .eq("estado", "S")
+        .order("orden"),
     ]);
 
   return (
@@ -45,6 +50,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       cuentas={cuentas || []}
       tiposDoc={tiposDoc || []}
       auxiliares={auxiliares || []}
+      categoriasFlujo={categoriasFlujo || []}
     />
   );
 }

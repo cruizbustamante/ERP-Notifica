@@ -12,6 +12,8 @@ export type MovMayor = {
   auxiliar_rut: string;
   tipo_doc: string;
   num_doc: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
 };
 
 export type LibroMayorResult = {
@@ -66,7 +68,7 @@ export async function getLibroMayor(
   // Movimientos del rango seleccionado
   const { data: movs } = await supabase
     .from("mov_contables")
-    .select("debe, haber, glosa, auxiliar_rut, tipo_doc, num_doc, comprobantes!inner(numero, tipo, fecha, anio, mes, estado)")
+    .select("debe, haber, glosa, auxiliar_rut, tipo_doc, num_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(numero, tipo, fecha, anio, mes, estado)")
     .eq("cuenta_codigo", cuentaCodigo)
     .eq("comprobantes.anio", anio)
     .eq("comprobantes.estado", "VIGENTE")
@@ -97,6 +99,8 @@ export async function getLibroMayor(
       auxiliar_rut: m.auxiliar_rut || "",
       tipo_doc: m.tipo_doc || "",
       num_doc: m.num_doc || "",
+      tipo_doc_ref: (m as Record<string, unknown>).tipo_doc_ref as string || "",
+      num_doc_ref: (m as Record<string, unknown>).num_doc_ref as string || "",
     };
   });
 
@@ -174,7 +178,7 @@ export async function getLibroMayorCompleto(
 
     const { data: movs } = await supabase
       .from("mov_contables")
-      .select("debe, haber, glosa, auxiliar_rut, tipo_doc, num_doc, comprobantes!inner(numero, tipo, fecha, anio, mes, estado)")
+      .select("debe, haber, glosa, auxiliar_rut, tipo_doc, num_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(numero, tipo, fecha, anio, mes, estado)")
       .eq("cuenta_codigo", cuenta.codigo)
       .eq("comprobantes.anio", anio)
       .eq("comprobantes.estado", "VIGENTE")
@@ -204,6 +208,8 @@ export async function getLibroMayorCompleto(
         auxiliar_rut: m.auxiliar_rut || "",
         tipo_doc: m.tipo_doc || "",
         num_doc: m.num_doc || "",
+        tipo_doc_ref: (m as Record<string, unknown>).tipo_doc_ref as string || "",
+        num_doc_ref: (m as Record<string, unknown>).num_doc_ref as string || "",
       };
     });
 

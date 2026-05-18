@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useCallback } from "react";
+import { useState, useTransition, useCallback, useEffect } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import {
@@ -11,11 +11,15 @@ import {
   getDocsPendientesAuxiliar,
   cargarCartolaSantander,
   cargarCartolaMP,
-  matchAutomatico,
+  previewMatchAutomatico,
+  confirmarMatchAutomatico,
   type MovCartola,
   type ContabilizarInput,
   type MatchResult,
+  type MatchPreviewItem,
+  type MatchDocAlternativo,
   type BancoInfo,
+  getSaldosBancos,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -23,7 +27,7 @@ type Cuenta = { codigo: string; nombre: string; tipo: string; usa_auxiliar: stri
 type Auxiliar = { rut: string; razon_social: string };
 type MesData = { abonos: number; cargos: number; pend: number; cont: number };
 type DocPend = { tipo_doc: string; num_doc: string; saldo: number };
-type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; orden: number };
+type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; flujo: string; orden: number };
 type SaldoBanco = { saldo: number; totalMovs: number; pendientes: number; contabilizados: number; totalAbonos: number; totalCargos: number };
 
 export default function ConciliacionClient({
@@ -44,7 +48,9 @@ export default function ConciliacionClient({
   const [bancoActivo, setBancoActivo] = useState(bancos[0]?.id || "CTE-SANTANDER");
   const [resumen, setResumen] = useState<Record<number, MesData>>(initialPorMes[bancoActivo] || {});
   const [saldos, setSaldos] = useState(initialSaldos);
-  const [consolidado] = useState(initialConsolidado);
+  const [consolidado, setConsolidado] = useState(initialConsolidado);
+  useEffect(() => { setSaldos(initialSaldos); }, [initialSaldos]);
+  useEffect(() => { setConsolidado(initialConsolidado); }, [initialConsolidado]);
   const [movimientos, setMovimientos] = useState<MovCartola[]>([]);
   const [mesActivo, setMesActivo] = useState<number | null>(null);
   const [vista, setVista] = useState<"dashboard" | "movimientos" | "contabilizar" | "upload">("dashboard");
@@ -62,7 +68,8 @@ export default function ConciliacionClient({
   const [formGlosa, setFormGlosa] = useState("");
   const [formTipoDoc, setFormTipoDoc] = useState("");
   const [formNumDoc, setFormNumDoc] = useState("");
-  const [formReferencia, setFormReferencia] = useState("");
+  const [formTipoDocRef, setFormTipoDocRef] = useState("");
+  const [formNumDocRef, setFormNumDocRef] = useState("");
   const [formCategoria, setFormCategoria] = useState("");
   const [docsPend, setDocsPend] = useState<DocPend[]>([]);
   const [busqAux, setBusqAux] = useState("");
@@ -73,6 +80,7 @@ export default function ConciliacionClient({
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
   const [matchLoading, setMatchLoading] = useState(false);
+  const [matchPreview, setMatchPreview] = useState<MatchPreviewItem[] | null>(null);
 
   const bancoInfo = bancos.find((b) => b.id === bancoActivo) || bancos[0];
   const stats = saldos[bancoActivo] || { saldo: 0, totalMovs: 0, pendientes: 0, contabilizados: 0, totalAbonos: 0, totalCargos: 0 };
@@ -90,17 +98,43 @@ export default function ConciliacionClient({
     if (!mesActivo) return;
     setMatchLoading(true);
     setMatchResult(null);
+    setMatchPreview(null);
     startTransition(async () => {
-      const result = await matchAutomatico(anio, mesActivo, bancoActivo);
+      const result = await previewMatchAutomatico(anio, mesActivo, bancoActivo);
+      setMatchLoading(false);
+      if (result.error) {
+        setMensaje({ tipo: "error", texto: result.error });
+      } else if (result.items.length > 0) {
+        setMatchPreview(result.items);
+      } else {
+        setMensaje({ tipo: "ok", texto: "No se encontraron coincidencias para conciliar automáticamente" });
+      }
+    });
+  };
+
+  const confirmarMatch = () => {
+    if (!mesActivo || !matchPreview) return;
+    setMatchLoading(true);
+    startTransition(async () => {
+      const ids = matchPreview.map((i) => i.cartola_id);
+      const cats: Record<number, string> = {};
+      const docSels: Record<number, { tipoDoc: string; numDoc: string }> = {};
+      for (const item of matchPreview) {
+        cats[item.cartola_id] = item.categoria_flujo;
+        if (item.docsAlternativos.length > 0) {
+          const selectedDoc = item.lineas.find((l) => l.tipo_doc);
+          if (selectedDoc) docSels[item.cartola_id] = { tipoDoc: selectedDoc.tipo_doc, numDoc: selectedDoc.num_doc };
+        }
+      }
+      const result = await confirmarMatchAutomatico(anio, mesActivo, ids, bancoActivo, cats, docSels);
       setMatchResult(result);
+      setMatchPreview(null);
       setMatchLoading(false);
       if (result.error) {
         setMensaje({ tipo: "error", texto: result.error });
       } else if (result.matched > 0) {
         setMensaje({ tipo: "ok", texto: `${result.matched} movimiento${result.matched > 1 ? "s" : ""} conciliado${result.matched > 1 ? "s" : ""} automáticamente` });
         cargarMovimientos(mesActivo);
-      } else {
-        setMensaje({ tipo: "ok", texto: "No se encontraron coincidencias para conciliar automáticamente" });
       }
     });
   };
@@ -108,8 +142,13 @@ export default function ConciliacionClient({
   const cargarResumen = (year?: number) => {
     const y = year || anio;
     startTransition(async () => {
-      const data = await getResumenCartola(y, bancoActivo);
+      const [data, saldoData] = await Promise.all([
+        getResumenCartola(y, bancoActivo),
+        getSaldosBancos(),
+      ]);
       setResumen(data);
+      setSaldos(saldoData.saldosPorBanco);
+      setConsolidado(saldoData.consolidado);
       setVista("dashboard");
       setMovimientos([]);
       setMesActivo(null);
@@ -138,8 +177,9 @@ export default function ConciliacionClient({
     setFormGlosa(mov.descripcion);
     setFormTipoDoc("");
     setFormNumDoc("");
-    setFormReferencia("");
-    setFormCategoria(esAbono ? "OP-COB" : "OP-PROV");
+    setFormTipoDocRef("");
+    setFormNumDocRef("");
+    setFormCategoria(esAbono ? "1.01" : "1.04");
     setFormCuenta("");
     setFormAuxiliar(mov.rut_extraido || "");
     setBusqAux(mov.rut_extraido || "");
@@ -165,6 +205,10 @@ export default function ConciliacionClient({
       setMensaje({ tipo: "error", texto: "Esta cuenta requiere auxiliar" });
       return;
     }
+    if (!formCategoria) {
+      setMensaje({ tipo: "error", texto: "Debe seleccionar categoría de flujo de efectivo" });
+      return;
+    }
 
     const input: ContabilizarInput = {
       cartola_id: movActivo.id,
@@ -174,7 +218,8 @@ export default function ConciliacionClient({
       glosa: formGlosa,
       tipo_doc: formTipoDoc,
       num_doc: formNumDoc,
-      referencia: formReferencia,
+      tipo_doc_ref: formTipoDocRef,
+      num_doc_ref: formNumDocRef,
       categoria_flujo: formCategoria,
     };
 
@@ -784,6 +829,106 @@ export default function ConciliacionClient({
             </div>
           )}
 
+          {/* Preview Match Automático */}
+          {matchPreview && matchPreview.length > 0 && (
+            <div className="border border-indigo-200 bg-indigo-50/30 rounded-xl p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-gray-900">Previsualización Match Automático — {matchPreview.length} coincidencia{matchPreview.length > 1 ? "s" : ""}</h4>
+                <button onClick={() => setMatchPreview(null)} className="text-gray-400 hover:text-gray-600 text-sm">Cerrar</button>
+              </div>
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                {matchPreview.map((item, idx) => (
+                  <div key={idx} className="bg-white rounded-lg border border-gray-200 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${item.esAbono ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                          {item.esAbono ? "ABONO" : "CARGO"}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${item.tipo_match === "exacto" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"}`}>
+                          {item.tipo_match}
+                        </span>
+                        <span className="text-xs text-gray-500">{item.fecha}</span>
+                        <span className="text-xs text-gray-400 flex items-center gap-1">Flujo:
+                          <select value={item.categoria_flujo} onChange={(e) => {
+                            setMatchPreview((prev) => prev ? prev.map((p) => p.cartola_id === item.cartola_id ? { ...p, categoria_flujo: e.target.value } : p) : prev);
+                          }} className="border border-gray-300 rounded px-1.5 py-0.5 text-xs font-medium text-gray-700 bg-white">
+                            {(["OPERACIONAL", "INVERSION", "FINANCIAMIENTO"] as const).map((flujo) => {
+                              const items = categoriasFlujo.filter((c) => c.flujo === flujo);
+                              if (items.length === 0) return null;
+                              const labels = { OPERACIONAL: "Operacional", INVERSION: "Inversión", FINANCIAMIENTO: "Financiamiento" };
+                              return (
+                                <optgroup key={flujo} label={labels[flujo]}>
+                                  {items.map((c) => <option key={c.id} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                                </optgroup>
+                              );
+                            })}
+                          </select>
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-sm">{formatMonto(item.monto)}</span>
+                    </div>
+                    <p className="text-xs text-gray-600 mb-2 truncate">{item.descripcion}</p>
+                    <p className="text-xs text-gray-500 mb-1">Docs: <strong>{item.docs}</strong> · RUT: <span className="font-mono">{formatRut(item.rut)}</span></p>
+                    {item.docsAlternativos.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-2">
+                        <p className="text-[10px] font-semibold text-amber-700 uppercase mb-1">Múltiples documentos con mismo monto — seleccione cuál pagar:</p>
+                        <select
+                          value={`${item.lineas.find((l) => l.tipo_doc)?.tipo_doc}|${item.lineas.find((l) => l.tipo_doc)?.num_doc}`}
+                          onChange={(e) => {
+                            const [tipoDoc, numDoc] = e.target.value.split("|");
+                            setMatchPreview((prev) => prev ? prev.map((p) => {
+                              if (p.cartola_id !== item.cartola_id) return p;
+                              const newLineas = p.lineas.map((l) => {
+                                if (!l.auxiliar_rut) return l;
+                                return { ...l, tipo_doc: tipoDoc, num_doc: numDoc };
+                              });
+                              return { ...p, docs: `${tipoDoc} ${numDoc}`, lineas: newLineas };
+                            }) : prev);
+                          }}
+                          className="w-full border border-amber-300 rounded px-2 py-1.5 text-xs bg-white font-mono"
+                        >
+                          {item.docsAlternativos.map((d) => (
+                            <option key={`${d.tipoDoc}-${d.numDoc}`} value={`${d.tipoDoc}|${d.numDoc}`}>
+                              {d.tipoDoc} {d.numDoc} — ${formatMonto(d.saldo)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-gray-400 border-b">
+                          <th className="pb-1 font-medium">Cuenta</th>
+                          <th className="pb-1 font-medium">Glosa</th>
+                          <th className="pb-1 font-medium">Auxiliar</th>
+                          <th className="pb-1 font-medium text-right">Debe</th>
+                          <th className="pb-1 font-medium text-right">Haber</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {item.lineas.map((l, li) => (
+                          <tr key={li} className="border-b last:border-0">
+                            <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-400 ml-1">— {l.cuenta_nombre}</span>}</td>
+                            <td className="py-1 truncate max-w-[180px]">{l.glosa}</td>
+                            <td className="py-1 font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
+                            <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
+                            <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setMatchPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">Cancelar</button>
+                <button onClick={confirmarMatch} disabled={isPending} className="bg-emerald-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                  {isPending ? "Contabilizando..." : `Confirmar ${matchPreview.length} asiento${matchPreview.length > 1 ? "s" : ""}`}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Tabla movimientos */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="hidden md:block overflow-x-auto">
@@ -818,7 +963,12 @@ export default function ConciliacionClient({
                           ? <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">OK</span>
                           : <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Pend.</span>}
                       </td>
-                      <td className="px-3 py-2.5 text-center">
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                        {m.contabilizado && m.comprobante_id && (
+                          <a href={`/contable/comprobantes/${m.comprobante_id}`} className="inline-block px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 mr-1" title="Ver comprobante">
+                            #{m.comprobante_id}
+                          </a>
+                        )}
                         {!m.contabilizado ? (
                           <button onClick={() => abrirContabilizar(m)} className="px-2.5 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 transition-colors">Contabilizar</button>
                         ) : (
@@ -855,6 +1005,9 @@ export default function ConciliacionClient({
                       {m.contabilizado
                         ? <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Contab.</span>
                         : <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Pendiente</span>}
+                      {m.contabilizado && m.comprobante_id && (
+                        <a href={`/contable/comprobantes/${m.comprobante_id}`} className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100">#{m.comprobante_id}</a>
+                      )}
                     </div>
                     {!m.contabilizado ? (
                       <button onClick={() => abrirContabilizar(m)} className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700">Contabilizar</button>
@@ -935,7 +1088,7 @@ export default function ConciliacionClient({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 sm:gap-4">
             <div>
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Tipo Doc</label>
               <input value={formTipoDoc} onChange={(e) => setFormTipoDoc(e.target.value)} placeholder="FAC, BV, NC..." className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
@@ -945,8 +1098,12 @@ export default function ConciliacionClient({
               <input value={formNumDoc} onChange={(e) => setFormNumDoc(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Referencia</label>
-              <input value={formReferencia} onChange={(e) => setFormReferencia(e.target.value)} placeholder="FAC|12345" className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
+              <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Tipo Doc Ref</label>
+              <input value={formTipoDocRef} onChange={(e) => setFormTipoDocRef(e.target.value)} placeholder="FAC, NCC..." className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">N° Doc Ref</label>
+              <input value={formNumDocRef} onChange={(e) => setFormNumDocRef(e.target.value)} placeholder="12345" className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400" />
             </div>
           </div>
 
@@ -960,7 +1117,7 @@ export default function ConciliacionClient({
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
                   <div className="divide-y divide-gray-100">
                     {docsPend.map((d) => (
-                      <button key={`${d.tipo_doc}-${d.num_doc}`} onClick={() => { setFormTipoDoc(d.tipo_doc); setFormNumDoc(d.num_doc); setFormReferencia(`${d.tipo_doc}|${d.num_doc}`); }}
+                      <button key={`${d.tipo_doc}-${d.num_doc}`} onClick={() => { setFormTipoDocRef(d.tipo_doc); setFormNumDocRef(d.num_doc); }}
                         className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-indigo-50 transition-colors text-sm">
                         <span><span className="font-medium">{d.tipo_doc}</span> <span className="font-mono text-gray-500">{d.num_doc}</span></span>
                         <span className="font-mono font-medium text-gray-900">{formatMonto(d.saldo)}</span>
@@ -981,7 +1138,16 @@ export default function ConciliacionClient({
               <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Categoría flujo</label>
               <select value={formCategoria} onChange={(e) => setFormCategoria(e.target.value)} className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
                 <option value="">Seleccionar...</option>
-                {categoriasFlujo.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
+                {(["OPERACIONAL", "INVERSION", "FINANCIAMIENTO"] as const).map((flujo) => {
+                  const items = categoriasFlujo.filter((c) => c.flujo === flujo);
+                  if (items.length === 0) return null;
+                  const labels = { OPERACIONAL: "Operacional", INVERSION: "Inversión", FINANCIAMIENTO: "Financiamiento" };
+                  return (
+                    <optgroup key={flujo} label={labels[flujo]}>
+                      {items.map((c) => <option key={c.id} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                    </optgroup>
+                  );
+                })}
               </select>
             </div>
           </div>

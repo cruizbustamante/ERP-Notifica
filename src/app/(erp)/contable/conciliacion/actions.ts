@@ -132,7 +132,8 @@ export type ContabilizarInput = {
   glosa: string;
   tipo_doc: string;
   num_doc: string;
-  referencia: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
   categoria_flujo: string;
 };
 
@@ -165,25 +166,23 @@ export async function contabilizarMovimiento(input: ContabilizarInput) {
   type Linea = {
     cuenta_codigo: string; debe: number; haber: number; glosa: string;
     auxiliar_rut: string; tipo_doc: string; num_doc: string;
-    fecha_doc: string | null; referencia: string;
+    fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string;
   };
 
   const lineas: Linea[] = [];
 
-  // Línea Banco
   lineas.push({
     cuenta_codigo: ctaBanco,
     debe: esAbono ? monto : 0,
     haber: esAbono ? 0 : monto,
     glosa: input.glosa || mov.descripcion,
     auxiliar_rut: "",
-    tipo_doc: "",
-    num_doc: "",
+    tipo_doc: "", num_doc: "",
     fecha_doc: null,
-    referencia: "",
+    tipo_doc_ref: "", num_doc_ref: "",
+    categoria_flujo: input.categoria_flujo || "",
   });
 
-  // Línea contrapartida
   lineas.push({
     cuenta_codigo: input.cuenta_contra,
     debe: esAbono ? 0 : monto,
@@ -193,7 +192,9 @@ export async function contabilizarMovimiento(input: ContabilizarInput) {
     tipo_doc: input.tipo_doc || "",
     num_doc: input.num_doc || "",
     fecha_doc: fecha,
-    referencia: input.referencia || "",
+    tipo_doc_ref: input.tipo_doc_ref || "",
+    num_doc_ref: input.num_doc_ref || "",
+    categoria_flujo: "",
   });
 
   // Tipo comprobante: I para ingresos/cobranza, E para egresos/pagos
@@ -296,6 +297,34 @@ export async function getBancos(): Promise<BancoInfo[]> {
       cuentaContable: config.CUENTA_BANCO_MP || "1-1-01-003",
     },
   ];
+}
+
+export async function getSaldosBancos() {
+  const supabase = await createClient();
+  const bancos = await getBancos();
+  const { data: allCartolas } = await supabase
+    .from("cartolas")
+    .select("monto, cargo_abono, cuenta_banco, contabilizado");
+
+  type SaldoBanco = { saldo: number; totalMovs: number; pendientes: number; contabilizados: number; totalAbonos: number; totalCargos: number };
+  const saldosPorBanco: Record<string, SaldoBanco> = {};
+  for (const b of bancos) {
+    saldosPorBanco[b.id] = { saldo: 0, totalMovs: 0, pendientes: 0, contabilizados: 0, totalAbonos: 0, totalCargos: 0 };
+  }
+  for (const m of allCartolas || []) {
+    const banco = m.cuenta_banco || "CTE-SANTANDER";
+    if (!saldosPorBanco[banco]) continue;
+    const monto = Math.abs(Number(m.monto));
+    const s = saldosPorBanco[banco];
+    s.totalMovs++;
+    s.saldo += m.cargo_abono === "A" ? monto : -monto;
+    if (m.contabilizado) s.contabilizados++;
+    else s.pendientes++;
+    if (m.cargo_abono === "A") s.totalAbonos += monto;
+    else s.totalCargos += monto;
+  }
+  const consolidado = Object.values(saldosPorBanco).reduce((s, b) => s + b.saldo, 0);
+  return { saldosPorBanco, consolidado };
 }
 
 // ─── Cargar cartola desde Excel ─────────────────────────────────────────
@@ -442,6 +471,36 @@ export type MatchResult = {
   error: string | null;
 };
 
+export type MatchDocAlternativo = { tipoDoc: string; numDoc: string; saldo: number; cuenta: string };
+
+export type MatchPreviewItem = {
+  cartola_id: number;
+  descripcion: string;
+  monto: number;
+  fecha: string;
+  rut: string;
+  esAbono: boolean;
+  tipo_match: "exacto" | "combinado";
+  docs: string;
+  categoria_flujo: string;
+  docsAlternativos: MatchDocAlternativo[];
+  lineas: Array<{
+    cuenta_codigo: string;
+    cuenta_nombre: string;
+    debe: number;
+    haber: number;
+    glosa: string;
+    auxiliar_rut: string;
+    tipo_doc: string;
+    num_doc: string;
+  }>;
+};
+
+export type MatchPreviewResult = {
+  items: MatchPreviewItem[];
+  error: string | null;
+};
+
 function validarDVRut(rut: string): boolean {
   const limpio = rut.replace(/[^0-9kK]/g, "").toUpperCase();
   if (limpio.length < 2) return false;
@@ -499,8 +558,8 @@ function extraerRUTDeDescripcion(desc: string): string {
   return "";
 }
 
-export async function matchAutomatico(anio: number, mes: number, banco?: string): Promise<MatchResult> {
-  await requireRol("contador");
+// Shared matching logic: finds matches without creating comprobantes
+async function findMatches(anio: number, mes: number, banco?: string) {
   const supabase = await createClient();
   const config = await getConfig();
   const ctaClientes = config.CUENTA_CLIENTES || "1-1-03-001";
@@ -512,244 +571,200 @@ export async function matchAutomatico(anio: number, mes: number, banco?: string)
   const cuentasCXP = [ctaProveedores, ctaHonorarios].filter(Boolean);
   const todasCuentasDoc = [...cuentasCXC, ...cuentasCXP];
 
-  // 1. Get pending cartola movements
   let cartolaQuery = supabase
     .from("cartolas")
     .select("id, fecha, monto, cargo_abono, descripcion, num_doc, cuenta_banco")
-    .eq("anio", anio)
-    .eq("mes", mes)
-    .eq("contabilizado", false);
-
+    .eq("anio", anio).eq("mes", mes).eq("contabilizado", false);
   if (banco) cartolaQuery = cartolaQuery.eq("cuenta_banco", banco);
-
   const { data: cartolaRows } = await cartolaQuery;
+  if (!cartolaRows || cartolaRows.length === 0) return { proposals: [], config };
 
-  if (!cartolaRows || cartolaRows.length === 0) {
-    return { matched: 0, details: [], error: null };
-  }
-
-  // 2. Extract RUTs from descriptions
-  type PendienteMov = {
-    id: number; fecha: string; monto: number; esAbono: boolean;
-    descripcion: string; rut: string; cuenta_banco: string;
-  };
-
+  type PendienteMov = { id: number; fecha: string; monto: number; esAbono: boolean; descripcion: string; rut: string; cuenta_banco: string };
   const pendientes: PendienteMov[] = [];
   const rutsNecesarios = new Set<string>();
-
   for (const row of cartolaRows) {
     const rut = extraerRUTDeDescripcion(row.descripcion || "");
     if (!rut) continue;
     rutsNecesarios.add(rut);
-    pendientes.push({
-      id: row.id,
-      fecha: row.fecha || "",
-      monto: Math.abs(Number(row.monto) || 0),
-      esAbono: row.cargo_abono === "A",
-      descripcion: row.descripcion || "",
-      rut,
-      cuenta_banco: row.cuenta_banco || "CTE-SANTANDER",
-    });
+    pendientes.push({ id: row.id, fecha: row.fecha || "", monto: Math.abs(Number(row.monto) || 0), esAbono: row.cargo_abono === "A", descripcion: row.descripcion || "", rut, cuenta_banco: row.cuenta_banco || "CTE-SANTANDER" });
   }
+  if (pendientes.length === 0) return { proposals: [], config };
 
-  if (pendientes.length === 0) {
-    return { matched: 0, details: [], error: null };
-  }
+  const { data: movsDoc } = await supabase.from("mov_contables")
+    .select("cuenta_codigo, debe, haber, auxiliar_rut, tipo_doc, num_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
+    .in("cuenta_codigo", todasCuentasDoc).in("auxiliar_rut", Array.from(rutsNecesarios)).eq("comprobantes.estado", "VIGENTE");
+  if (!movsDoc || movsDoc.length === 0) return { proposals: [], config };
 
-  // 3. Get all accounting movements for those RUTs in CXC/CXP accounts
-  const { data: movsDoc } = await supabase
-    .from("mov_contables")
-    .select("cuenta_codigo, debe, haber, auxiliar_rut, tipo_doc, num_doc, referencia, comprobantes!inner(estado)")
-    .in("cuenta_codigo", todasCuentasDoc)
-    .in("auxiliar_rut", Array.from(rutsNecesarios))
-    .eq("comprobantes.estado", "VIGENTE");
-
-  if (!movsDoc || movsDoc.length === 0) {
-    return { matched: 0, details: [], error: null };
-  }
-
-  // 4. Get plan_cuentas to know account types
-  const { data: planCtas } = await supabase
-    .from("plan_cuentas")
-    .select("codigo, tipo")
-    .in("codigo", todasCuentasDoc);
-
+  const { data: planCtas } = await supabase.from("plan_cuentas").select("codigo, tipo, nombre").in("codigo", [...todasCuentasDoc, config.CUENTA_BANCO || "1-1-01-002", config.CUENTA_BANCO_MP || "1-1-01-003"]);
   const ctaTipos: Record<string, string> = {};
-  for (const c of planCtas || []) ctaTipos[c.codigo] = c.tipo;
+  const ctaNombres: Record<string, string> = {};
+  for (const c of planCtas || []) { ctaTipos[c.codigo] = c.tipo; ctaNombres[c.codigo] = c.nombre || ""; }
 
-  // 5. Build pending documents map: { rut: { CXC: [docs], CXP: [docs] } }
   type DocPendiente = { tipoDoc: string; numDoc: string; saldo: number; cuenta: string };
   const docsTemp: Record<string, { cargos: number; abonos: number; tipoDoc: string; numDoc: string; cuenta: string; rut: string }> = {};
-
   for (const m of movsDoc) {
     const auxRut = (m.auxiliar_rut || "").toUpperCase();
     if (!rutsNecesarios.has(auxRut)) continue;
-
-    const refTipo = m.referencia?.split("|")[0] || m.tipo_doc || "";
-    const refNum = m.referencia?.split("|")[1] || m.num_doc || "";
-    if (!refTipo || !refNum) continue;
-
-    const clave = `${auxRut}|${m.cuenta_codigo}|${refTipo}|${refNum}`;
-    if (!docsTemp[clave]) {
-      docsTemp[clave] = { cargos: 0, abonos: 0, tipoDoc: refTipo, numDoc: refNum, cuenta: m.cuenta_codigo, rut: auxRut };
-    }
+    const docTipo = m.tipo_doc_ref || m.tipo_doc || "";
+    const docNum = m.num_doc_ref || m.num_doc || "";
+    if (!docTipo || !docNum) continue;
+    const clave = `${auxRut}|${m.cuenta_codigo}|${docTipo}|${docNum}`;
+    if (!docsTemp[clave]) docsTemp[clave] = { cargos: 0, abonos: 0, tipoDoc: docTipo, numDoc: docNum, cuenta: m.cuenta_codigo, rut: auxRut };
     docsTemp[clave].cargos += Number(m.debe) || 0;
     docsTemp[clave].abonos += Number(m.haber) || 0;
   }
 
   const docsPorRUT: Record<string, { CXC: DocPendiente[]; CXP: DocPendiente[] }> = {};
-
   for (const d of Object.values(docsTemp)) {
     const esActivo = ctaTipos[d.cuenta] === "A";
     const saldo = esActivo ? (d.cargos - d.abonos) : (d.abonos - d.cargos);
     if (Math.abs(saldo) < 1) continue;
-
     if (!docsPorRUT[d.rut]) docsPorRUT[d.rut] = { CXC: [], CXP: [] };
-
     const doc: DocPendiente = { tipoDoc: d.tipoDoc, numDoc: d.numDoc, saldo: Math.abs(saldo), cuenta: d.cuenta };
     if (cuentasCXC.includes(d.cuenta)) docsPorRUT[d.rut].CXC.push(doc);
     else docsPorRUT[d.rut].CXP.push(doc);
   }
 
-  // 6. Matching + contabilización
-  const matches: MatchResult["details"] = [];
-  const usedCartolas = new Set<number>();
+  type Proposal = {
+    mov: PendienteMov;
+    matchedDocs: DocPendiente[];
+    allExactDocs: DocPendiente[];
+    matchTipo: "exacto" | "combinado";
+    docsDesc: string;
+    glosa: string;
+    categoriaFlujo: string;
+    cuentaDocUsada: string;
+    ctaBancoMov: string;
+  };
 
-  // Group pendientes by RUT
+  const proposals: Proposal[] = [];
+  const usedCartolas = new Set<number>();
   const porRUT: Record<string, PendienteMov[]> = {};
-  for (const p of pendientes) {
-    if (!porRUT[p.rut]) porRUT[p.rut] = [];
-    porRUT[p.rut].push(p);
-  }
+  for (const p of pendientes) { if (!porRUT[p.rut]) porRUT[p.rut] = []; porRUT[p.rut].push(p); }
 
   for (const rut of Object.keys(porRUT)) {
     const rutDocs = docsPorRUT[rut];
     if (!rutDocs) continue;
-
     for (const mov of porRUT[rut]) {
       if (usedCartolas.has(mov.id)) continue;
-
       const docsPool = mov.esAbono ? rutDocs.CXC : rutDocs.CXP;
       if (!docsPool || docsPool.length === 0) continue;
-
-      const tipoContab = mov.esAbono ? "COBRANZA" : "PAGO";
-      const cuentaContra = mov.esAbono ? ctaClientes : ctaProveedores;
-      const categoriaFlujo = mov.esAbono ? "OP-COB" : "OP-PROV";
-
-      // a) Exact match: single document = cartola amount
+      let categoriaFlujo = mov.esAbono ? "1.01" : "1.04";
       let matchedDocs: DocPendiente[] | null = null;
+      let allExactDocs: DocPendiente[] = [];
       let matchTipo: "exacto" | "combinado" = "exacto";
-
-      const exactIdx = docsPool.findIndex((d) => Math.abs(d.saldo - mov.monto) < 1);
-      if (exactIdx >= 0) {
-        matchedDocs = [docsPool[exactIdx]];
-        docsPool.splice(exactIdx, 1);
+      const exactMatches = docsPool.filter((d) => Math.abs(d.saldo - mov.monto) < 1);
+      if (exactMatches.length > 0) {
+        matchedDocs = [exactMatches[0]];
+        allExactDocs = exactMatches.length > 1 ? exactMatches : [];
+        const idx = docsPool.indexOf(exactMatches[0]);
+        if (idx >= 0) docsPool.splice(idx, 1);
       } else {
-        // b) Combined match: accumulate docs until sum = amount
         const sorted = docsPool.slice().sort((a, b) => b.saldo - a.saldo);
         let acum = 0;
         const combo: { doc: DocPendiente; idx: number }[] = [];
-        for (let i = 0; i < sorted.length; i++) {
-          if (acum + sorted[i].saldo <= mov.monto + 1) {
-            acum += sorted[i].saldo;
-            combo.push({ doc: sorted[i], idx: docsPool.indexOf(sorted[i]) });
-          }
-          if (Math.abs(acum - mov.monto) < 1) break;
-        }
-        if (combo.length > 0 && Math.abs(acum - mov.monto) < 1) {
-          matchedDocs = combo.map((c) => c.doc);
-          matchTipo = "combinado";
-          // Remove used docs from pool (reverse order to preserve indices)
-          const indices = combo.map((c) => c.idx).filter((i) => i >= 0).sort((a, b) => b - a);
-          for (const idx of indices) docsPool.splice(idx, 1);
-        }
+        for (let i = 0; i < sorted.length; i++) { if (acum + sorted[i].saldo <= mov.monto + 1) { acum += sorted[i].saldo; combo.push({ doc: sorted[i], idx: docsPool.indexOf(sorted[i]) }); } if (Math.abs(acum - mov.monto) < 1) break; }
+        if (combo.length > 0 && Math.abs(acum - mov.monto) < 1) { matchedDocs = combo.map((c) => c.doc); matchTipo = "combinado"; const indices = combo.map((c) => c.idx).filter((i) => i >= 0).sort((a, b) => b - a); for (const idx of indices) docsPool.splice(idx, 1); }
       }
-
       if (!matchedDocs) continue;
-
-      // Create comprobante
       const docsDesc = matchedDocs.map((d) => `${d.tipoDoc} ${d.numDoc}`).join(", ");
+      const cuentaDocUsada = matchedDocs[0].cuenta || (mov.esAbono ? ctaClientes : ctaProveedores);
+      if (!mov.esAbono && cuentaDocUsada === ctaHonorarios) categoriaFlujo = "1.06";
       const glosa = `${mov.esAbono ? "Cobranza" : "Pago"} ${docsDesc}`;
-      const cuentaDocUsada = matchedDocs[0].cuenta || cuentaContra;
-
-      type Linea = {
-        cuenta_codigo: string; debe: number; haber: number; glosa: string;
-        auxiliar_rut: string; tipo_doc: string; num_doc: string;
-        fecha_doc: string | null; referencia: string;
-      };
-
-      const lineas: Linea[] = [];
-
-      // Bank line — cuenta contable según banco del movimiento
-      const ctaBancoMov = mov.cuenta_banco === "CTE-MP"
-        ? (config.CUENTA_BANCO_MP || "1-1-01-003")
-        : (config.CUENTA_BANCO || "1-1-01-002");
-
-      lineas.push({
-        cuenta_codigo: ctaBancoMov,
-        debe: mov.esAbono ? mov.monto : 0,
-        haber: mov.esAbono ? 0 : mov.monto,
-        glosa,
-        auxiliar_rut: "",
-        tipo_doc: "",
-        num_doc: "",
-        fecha_doc: null,
-        referencia: "",
-      });
-
-      // One contra line per matched doc (for proper document tracking)
-      for (const doc of matchedDocs) {
-        lineas.push({
-          cuenta_codigo: cuentaDocUsada,
-          debe: mov.esAbono ? 0 : doc.saldo,
-          haber: mov.esAbono ? doc.saldo : 0,
-          glosa,
-          auxiliar_rut: rut,
-          tipo_doc: doc.tipoDoc,
-          num_doc: doc.numDoc,
-          fecha_doc: mov.fecha,
-          referencia: `${doc.tipoDoc}|${doc.numDoc}`,
-        });
-      }
-
-      const tipoComp = mov.esAbono ? "I" : "E";
-      const result = await crearComprobante({
-        tipo: tipoComp,
-        fecha: mov.fecha,
-        glosa,
-        lineas,
-      });
-
-      if (result.error) continue;
-
-      // Mark cartola as contabilized
-      await supabase
-        .from("cartolas")
-        .update({
-          contabilizado: true,
-          comprobante_id: result.data!.id,
-          categoria_flujo: categoriaFlujo,
-        })
-        .eq("id", mov.id);
-
+      const ctaBancoMov = mov.cuenta_banco === "CTE-MP" ? (config.CUENTA_BANCO_MP || "1-1-01-003") : (config.CUENTA_BANCO || "1-1-01-002");
       usedCartolas.add(mov.id);
-      matches.push({
-        cartola_id: mov.id,
-        comprobante_id: result.data!.id,
-        monto: mov.monto,
-        fecha_cartola: mov.fecha,
-        receptor: rut,
-        tipo_match: matchTipo,
-        docs: docsDesc,
-      });
+      proposals.push({ mov, matchedDocs, allExactDocs, matchTipo, docsDesc, glosa, categoriaFlujo, cuentaDocUsada, ctaBancoMov });
     }
   }
+  return { proposals, config, ctaNombres };
+}
 
-  if (matches.length > 0) {
-    revalidatePath("/contable/conciliacion");
+export async function previewMatchAutomatico(anio: number, mes: number, banco?: string): Promise<MatchPreviewResult> {
+  await requireRol("contador");
+  const { proposals, ctaNombres } = await findMatches(anio, mes, banco);
+  const nombres = ctaNombres || {};
+
+  const items: MatchPreviewItem[] = proposals.map((p) => {
+    const lineas: MatchPreviewItem["lineas"] = [];
+    lineas.push({
+      cuenta_codigo: p.ctaBancoMov,
+      cuenta_nombre: nombres[p.ctaBancoMov] || "",
+      debe: p.mov.esAbono ? p.mov.monto : 0,
+      haber: p.mov.esAbono ? 0 : p.mov.monto,
+      glosa: p.glosa,
+      auxiliar_rut: "",
+      tipo_doc: "", num_doc: "",
+    });
+    for (const doc of p.matchedDocs) {
+      lineas.push({
+        cuenta_codigo: p.cuentaDocUsada,
+        cuenta_nombre: nombres[p.cuentaDocUsada] || "",
+        debe: p.mov.esAbono ? 0 : doc.saldo,
+        haber: p.mov.esAbono ? doc.saldo : 0,
+        glosa: p.glosa,
+        auxiliar_rut: p.mov.rut,
+        tipo_doc: doc.tipoDoc, num_doc: doc.numDoc,
+      });
+    }
+    return {
+      cartola_id: p.mov.id, descripcion: p.mov.descripcion, monto: p.mov.monto,
+      fecha: p.mov.fecha, rut: p.mov.rut, esAbono: p.mov.esAbono,
+      tipo_match: p.matchTipo, docs: p.docsDesc, categoria_flujo: p.categoriaFlujo,
+      docsAlternativos: p.allExactDocs,
+      lineas,
+    };
+  });
+
+  return { items, error: null };
+}
+
+export async function confirmarMatchAutomatico(
+  anio: number, mes: number, cartolaIds: number[], banco?: string,
+  categorias?: Record<number, string>,
+  docSelections?: Record<number, { tipoDoc: string; numDoc: string }>
+): Promise<MatchResult> {
+  await requireRol("contador");
+  const supabase = await createClient();
+  const { proposals, config } = await findMatches(anio, mes, banco);
+  const selectedIds = new Set(cartolaIds);
+  const selected = proposals.filter((p) => selectedIds.has(p.mov.id));
+
+  const matches: MatchResult["details"] = [];
+
+  for (const p of selected) {
+    const flujo = categorias?.[p.mov.id] || p.categoriaFlujo || "";
+    const sel = docSelections?.[p.mov.id];
+    let docsToUse = p.matchedDocs;
+    if (sel && p.allExactDocs.length > 0) {
+      const found = p.allExactDocs.find((d) => d.tipoDoc === sel.tipoDoc && d.numDoc === sel.numDoc);
+      if (found) docsToUse = [found];
+    }
+    const docsDesc = docsToUse.map((d) => `${d.tipoDoc} ${d.numDoc}`).join(", ");
+    const glosa = `${p.mov.esAbono ? "Cobranza" : "Pago"} ${docsDesc}`;
+    type Linea = { cuenta_codigo: string; debe: number; haber: number; glosa: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string; categoria_flujo: string };
+    const lineas: Linea[] = [];
+    lineas.push({ cuenta_codigo: p.ctaBancoMov, debe: p.mov.esAbono ? p.mov.monto : 0, haber: p.mov.esAbono ? 0 : p.mov.monto, glosa: glosa, auxiliar_rut: "", tipo_doc: "", num_doc: "", fecha_doc: null, tipo_doc_ref: "", num_doc_ref: "", categoria_flujo: flujo });
+    for (const doc of docsToUse) {
+      lineas.push({ cuenta_codigo: p.cuentaDocUsada, debe: p.mov.esAbono ? 0 : doc.saldo, haber: p.mov.esAbono ? doc.saldo : 0, glosa: glosa, auxiliar_rut: p.mov.rut, tipo_doc: "", num_doc: "", fecha_doc: p.mov.fecha, tipo_doc_ref: doc.tipoDoc, num_doc_ref: doc.numDoc, categoria_flujo: "" });
+    }
+    const tipoComp = p.mov.esAbono ? "I" : "E";
+    const result = await crearComprobante({ tipo: tipoComp, fecha: p.mov.fecha, glosa: glosa, lineas });
+    if (result.error) continue;
+    await supabase.from("cartolas").update({ contabilizado: true, comprobante_id: result.data!.id, categoria_flujo: flujo }).eq("id", p.mov.id);
+    matches.push({ cartola_id: p.mov.id, comprobante_id: result.data!.id, monto: p.mov.monto, fecha_cartola: p.mov.fecha, receptor: p.mov.rut, tipo_match: p.matchTipo, docs: docsDesc });
   }
 
+  if (matches.length > 0) revalidatePath("/contable/conciliacion");
   return { matched: matches.length, details: matches, error: null };
+}
+
+// Legacy function kept for compatibility
+export async function matchAutomatico(anio: number, mes: number, banco?: string): Promise<MatchResult> {
+  const preview = await previewMatchAutomatico(anio, mes, banco);
+  if (preview.error) return { matched: 0, details: [], error: preview.error };
+  if (preview.items.length === 0) return { matched: 0, details: [], error: null };
+  const allIds = preview.items.map((i) => i.cartola_id);
+  return confirmarMatchAutomatico(anio, mes, allIds, banco);
 }
 
 // ─── Documentos pendientes para un auxiliar ─────────────────────────────
@@ -768,7 +783,7 @@ export async function getDocsPendientesAuxiliar(cuentaCodigo: string, auxiliarRu
 
   const { data: movs } = await supabase
     .from("mov_contables")
-    .select("tipo_doc, num_doc, debe, haber, referencia, comprobantes!inner(estado)")
+    .select("tipo_doc, num_doc, debe, haber, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
     .eq("cuenta_codigo", cuentaCodigo)
     .eq("auxiliar_rut", auxiliarRut)
     .eq("comprobantes.estado", "VIGENTE")
@@ -779,8 +794,9 @@ export async function getDocsPendientesAuxiliar(cuentaCodigo: string, auxiliarRu
   const saldos = new Map<string, number>();
   for (const m of movs) {
     const docKey = `${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia || docKey;
-    const isRegistro = !m.referencia || m.referencia === docKey;
+    const hasRef = m.tipo_doc_ref && m.num_doc_ref;
+    const refKey = hasRef ? `${m.tipo_doc_ref}|${m.num_doc_ref}` : docKey;
+    const isRegistro = !hasRef;
     const monto = deudor
       ? Number(m.debe) - Number(m.haber)
       : Number(m.haber) - Number(m.debe);

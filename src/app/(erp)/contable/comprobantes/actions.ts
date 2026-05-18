@@ -13,7 +13,9 @@ type LineaData = {
   tipo_doc: string;
   num_doc: string;
   fecha_doc: string | null;
-  referencia: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
+  categoria_flujo: string;
 };
 
 export async function crearComprobante(data: {
@@ -69,13 +71,13 @@ export async function crearComprobante(data: {
     if (cuenta.nivel !== 4) {
       return { error: `Línea ${i + 1}: cuenta ${l.cuenta_codigo} (${cuenta.nombre}) no es de movimiento` };
     }
-    if (cuenta.usa_auxiliar === "X" && !l.auxiliar_rut) {
+    const esSistema = data.tipo === "A" || data.tipo === "C";
+    if (cuenta.usa_auxiliar === "X" && !l.auxiliar_rut && !esSistema) {
       return { error: `Línea ${i + 1}: cuenta ${l.cuenta_codigo} requiere auxiliar` };
     }
-    if (cuenta.usa_documento === "X" && (!l.tipo_doc || !l.num_doc) && !l.referencia) {
+    if (cuenta.usa_documento === "X" && (!l.tipo_doc || !l.num_doc) && !l.tipo_doc_ref && !esSistema) {
       return { error: `Línea ${i + 1}: cuenta ${l.cuenta_codigo} requiere documento` };
     }
-    // Limpiar campos que no aplican
     if (cuenta.usa_auxiliar !== "X") {
       l.auxiliar_rut = "";
     }
@@ -83,7 +85,8 @@ export async function crearComprobante(data: {
       l.tipo_doc = "";
       l.num_doc = "";
       l.fecha_doc = null;
-      l.referencia = "";
+      l.tipo_doc_ref = "";
+      l.num_doc_ref = "";
     }
 
     if (l.auxiliar_rut && !rutsUsados.includes(l.auxiliar_rut)) {
@@ -121,7 +124,7 @@ export async function crearComprobante(data: {
 
   // 6. Detección de duplicados (docs tributarios con REGISTRO)
   const docsRegistro = data.lineas.filter(
-    (l) => l.tipo_doc && l.num_doc && !l.referencia
+    (l) => l.tipo_doc && l.num_doc && !l.tipo_doc_ref
   );
   if (docsRegistro.length > 0) {
     for (const doc of docsRegistro) {
@@ -132,7 +135,7 @@ export async function crearComprobante(data: {
         .eq("auxiliar_rut", doc.auxiliar_rut)
         .eq("tipo_doc", doc.tipo_doc)
         .eq("num_doc", doc.num_doc)
-        .eq("referencia", "")
+        .eq("tipo_doc_ref", "")
         .eq("comprobantes.estado", "VIGENTE");
 
       if (count && count > 0) {
@@ -144,7 +147,7 @@ export async function crearComprobante(data: {
   }
 
   // 7. Validar rebajas no excedan saldo disponible
-  const lineasRebaja = data.lineas.filter((l) => l.referencia);
+  const lineasRebaja = data.lineas.filter((l) => l.tipo_doc_ref);
   for (const l of lineasRebaja) {
     const cuenta = cuentaMap.get(l.cuenta_codigo);
     if (!cuenta) continue;
@@ -152,17 +155,13 @@ export async function crearComprobante(data: {
     const montoRebaja = esDeudor ? l.haber : l.debe;
 
     if (montoRebaja > 0) {
-      const refParts = l.referencia.split("|");
-      const refTipo = refParts[0] || "";
-      const refNum = refParts[1] || "";
-
       const { data: movs } = await supabase
         .from("mov_contables")
         .select("debe, haber, comprobantes!inner(estado)")
         .eq("cuenta_codigo", l.cuenta_codigo)
         .eq("auxiliar_rut", l.auxiliar_rut)
         .eq("comprobantes.estado", "VIGENTE")
-        .or(`referencia.eq.${refTipo}|${refNum},and(tipo_doc.eq.${refTipo},num_doc.eq.${refNum},referencia.eq.)`);
+        .or(`and(tipo_doc_ref.eq.${l.tipo_doc_ref},num_doc_ref.eq.${l.num_doc_ref}),and(tipo_doc.eq.${l.tipo_doc_ref},num_doc.eq.${l.num_doc_ref},tipo_doc_ref.eq.)`);
 
       let saldoDoc = 0;
       for (const m of movs || []) {
@@ -173,7 +172,7 @@ export async function crearComprobante(data: {
 
       if (montoRebaja > Math.abs(saldoDoc) + 1) {
         return {
-          error: `${refTipo} ${refNum}: rebaja $${Math.round(montoRebaja).toLocaleString()} excede saldo disponible $${Math.round(Math.abs(saldoDoc)).toLocaleString()}`,
+          error: `${l.tipo_doc_ref} ${l.num_doc_ref}: rebaja $${Math.round(montoRebaja).toLocaleString()} excede saldo disponible $${Math.round(Math.abs(saldoDoc)).toLocaleString()}`,
         };
       }
     }
@@ -225,7 +224,9 @@ export async function crearComprobante(data: {
     tipo_doc: l.tipo_doc,
     num_doc: l.num_doc,
     fecha_doc: l.fecha_doc || null,
-    referencia: l.referencia,
+    tipo_doc_ref: l.tipo_doc_ref,
+    num_doc_ref: l.num_doc_ref,
+    categoria_flujo: l.categoria_flujo,
   }));
 
   const { error: lineErr } = await supabase
@@ -279,7 +280,8 @@ export async function anularComprobante(id: number) {
       const { count } = await supabase
         .from("mov_contables")
         .select("*, comprobantes!inner(estado)", { count: "exact", head: true })
-        .eq("referencia", docRef)
+        .eq("tipo_doc_ref", m.tipo_doc)
+        .eq("num_doc_ref", m.num_doc)
         .neq("comprobante_id", id)
         .eq("comprobantes.estado", "VIGENTE");
 
@@ -402,7 +404,9 @@ export async function actualizarComprobante(
     tipo_doc: l.tipo_doc,
     num_doc: l.num_doc,
     fecha_doc: l.fecha_doc || null,
-    referencia: l.referencia,
+    tipo_doc_ref: l.tipo_doc_ref,
+    num_doc_ref: l.num_doc_ref,
+    categoria_flujo: l.categoria_flujo,
   }));
 
   const { error: lineErr } = await supabase.from("mov_contables").insert(lineas);
@@ -431,30 +435,28 @@ export async function getDocumentosAbiertos(
   const { data: movs } = await supabase
     .from("mov_contables")
     .select(
-      "tipo_doc, num_doc, debe, haber, referencia, comprobantes!inner(estado)"
+      "tipo_doc, num_doc, tipo_doc_ref, num_doc_ref, debe, haber, comprobantes!inner(estado)"
     )
     .eq("cuenta_codigo", cuenta_codigo)
     .eq("auxiliar_rut", auxiliar_rut)
     .eq("comprobantes.estado", "VIGENTE")
-    .neq("tipo_doc", "");
+    .or("tipo_doc.neq.,tipo_doc_ref.neq.");
 
   if (!movs || movs.length === 0) return { data: [] };
 
   const saldos = new Map<string, number>();
 
   for (const m of movs) {
-    const docKey = `${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia || docKey;
-    const isRegistro = !m.referencia || m.referencia === docKey;
-
     const monto = deudor
       ? Number(m.debe) - Number(m.haber)
       : Number(m.haber) - Number(m.debe);
 
-    if (isRegistro) {
-      saldos.set(docKey, (saldos.get(docKey) || 0) + monto);
-    } else {
+    if (m.tipo_doc_ref && m.num_doc_ref) {
+      const refKey = `${m.tipo_doc_ref}|${m.num_doc_ref}`;
       saldos.set(refKey, (saldos.get(refKey) || 0) + monto);
+    } else if (m.tipo_doc && m.num_doc) {
+      const docKey = `${m.tipo_doc}|${m.num_doc}`;
+      saldos.set(docKey, (saldos.get(docKey) || 0) + monto);
     }
   }
 

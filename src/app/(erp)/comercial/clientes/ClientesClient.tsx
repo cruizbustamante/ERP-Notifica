@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { formatMonto } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
+import { guardarFicha } from "./actions";
+import YearSelector from "@/components/YearSelector";
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -32,6 +34,8 @@ type DashboardData = {
 type Props = {
   clientes: Cliente[]; fichas: FichaComercial[]; totalClientes: number;
   totalVentasGlobal: number; clientesConDeuda: number; dashboard: DashboardData;
+  anio: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 function avatarColor(name: string) {
@@ -45,12 +49,16 @@ const ESTADO_COLORS = ["#10b981", "#94a3b8"];
 const DOC_COLORS = ["#1e1b8a", "#a78bfa", "#94a3b8"];
 const PLAN_COLORS = ["#4f46e5", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#94a3b8"];
 
-export default function ClientesClient({ clientes, fichas, totalClientes, totalVentasGlobal, clientesConDeuda, dashboard }: Props) {
+export default function ClientesClient({ clientes, fichas, totalClientes, totalVentasGlobal, clientesConDeuda, dashboard, anio, periodos }: Props) {
   const [buscar, setBuscar] = useState("");
   const [ordenar, setOrdenar] = useState<"ventas" | "nombre" | "deuda">("nombre");
   const [tab, setTab] = useState<"todos" | "activos" | "inactivos" | "deuda">("todos");
   const [selectedRut, setSelectedRut] = useState<string | null>(null);
   const [vista, setVista] = useState<"dashboard" | "tabla">("dashboard");
+  const [editando, setEditando] = useState(false);
+  const [form, setForm] = useState<FichaComercial | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const [mensaje, setMensaje] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
 
   const fichaMap = new Map(fichas.map((f) => [f.rut, f]));
 
@@ -97,9 +105,12 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-[#1e1b4b]">Ficha Cliente</h1>
-          <p className="text-xs text-gray-400 mt-0.5">Dashboard / Ficha Cliente</p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-[#1e1b4b]">Ficha Cliente</h1>
+            <p className="text-xs text-gray-400 mt-0.5">Dashboard / Ficha Cliente</p>
+          </div>
+          <YearSelector anio={anio} periodos={periodos} />
         </div>
         <div className="flex items-center gap-2">
           <div className="flex bg-gray-100 rounded-lg p-0.5">
@@ -355,12 +366,13 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
         </div>
       )}
 
-      {/* Modal Detalle */}
+      {/* Modal Detalle / Edición */}
       {selected && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-8 px-4" onClick={() => setSelectedRut(null)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-8 px-4" onClick={() => { if (!editando) { setSelectedRut(null); setEditando(false); setForm(null); setMensaje(null); } }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden animate-modal" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
             <div className="relative px-6 py-5 text-white" style={{ background: "linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%)" }}>
-              <button onClick={() => setSelectedRut(null)} className="absolute top-4 right-4 text-white/60 hover:text-white text-xl font-light">×</button>
+              <button onClick={() => { setSelectedRut(null); setEditando(false); setForm(null); setMensaje(null); }} className="absolute top-4 right-4 text-white/60 hover:text-white text-xl font-light">×</button>
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-full flex items-center justify-center ring-3 ring-white/20" style={{ background: avatarColor(selected.razon_social) }}>
                   <span className="text-xl font-bold text-white">{selected.razon_social[0]}</span>
@@ -381,6 +393,7 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
               </div>
             </div>
 
+            {/* KPI strip */}
             <div className="grid grid-cols-4 border-b border-gray-100">
               {[
                 { label: "Tarifa", value: selectedFicha?.valor_plan ? `${selectedFicha.valor_plan} UF` : "—", color: "text-[#1e1b4b]" },
@@ -395,8 +408,15 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
               ))}
             </div>
 
+            {/* Mensaje */}
+            {mensaje && (
+              <div className={`mx-6 mt-4 p-3 rounded-lg text-sm font-medium ${mensaje.tipo === "ok" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+                {mensaje.texto}
+              </div>
+            )}
+
             <div className="p-6 overflow-y-auto max-h-[45vh]">
-              {selected.saldoPendiente > 0 && (
+              {selected.saldoPendiente > 0 && !editando && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 flex items-center gap-3">
                   <span className="text-lg">⚠️</span>
                   <div>
@@ -405,40 +425,149 @@ export default function ClientesClient({ clientes, fichas, totalClientes, totalV
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-x-8 gap-y-3">
-                <div>
-                  <p className="text-[11px] text-gray-400 uppercase font-semibold mb-3">👤 Datos del Cliente</p>
-                  <div className="space-y-2">
-                    <InfoRow label="RUT" value={formatRut(selected.rut)} />
-                    <InfoRow label="Razón Social" value={selected.razon_social} />
-                    <InfoRow label="Giro" value={selectedFicha?.giro || selected.giro || "—"} />
-                    <InfoRow label="Dirección" value={selectedFicha?.direccion || "—"} />
-                    <InfoRow label="Email" value={selectedFicha?.email || selected.email || "—"} />
-                    <InfoRow label="Teléfono" value={selectedFicha?.telefono || selected.telefono || "—"} />
+
+              {!editando ? (
+                /* ─── Vista lectura ─── */
+                <>
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+                    <div>
+                      <p className="text-[11px] text-gray-400 uppercase font-semibold mb-3">Datos del Cliente</p>
+                      <div className="space-y-2">
+                        <InfoRow label="RUT" value={formatRut(selected.rut)} />
+                        <InfoRow label="Razón Social" value={selected.razon_social} />
+                        <InfoRow label="Giro" value={selectedFicha?.giro || selected.giro || "—"} />
+                        <InfoRow label="Dirección" value={selectedFicha?.direccion || "—"} />
+                        <InfoRow label="Email" value={selectedFicha?.email || selected.email || "—"} />
+                        <InfoRow label="Teléfono" value={selectedFicha?.telefono || selected.telefono || "—"} />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-gray-400 uppercase font-semibold mb-3">Datos Comerciales</p>
+                      <div className="space-y-2">
+                        <InfoRow label="Plan" value={selectedFicha?.plan || "—"} />
+                        <InfoRow label="Tarifa" value={selectedFicha?.valor_plan ? `${selectedFicha.valor_plan} UF` : "—"} />
+                        <InfoRow label="Facturación" value={selectedFicha?.facturacion_tipo || "—"} />
+                        <InfoRow label="Tipo Doc." value={selectedFicha?.tipo_doc || "—"} />
+                        <InfoRow label="Fecha Ingreso" value={selectedFicha?.fecha_inicio || "—"} />
+                        <InfoRow label="Estado" value={selectedFicha?.estado || "—"} />
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <p className="text-[11px] text-gray-400 uppercase font-semibold mb-3">💰 Datos Comerciales</p>
-                  <div className="space-y-2">
-                    <InfoRow label="Plan" value={selectedFicha?.plan || "—"} />
-                    <InfoRow label="Tarifa" value={selectedFicha?.valor_plan ? `${selectedFicha.valor_plan} UF` : "—"} />
-                    <InfoRow label="Facturación" value={selectedFicha?.facturacion_tipo || "—"} />
-                    <InfoRow label="Tipo Doc." value={selectedFicha?.tipo_doc || "—"} />
-                    <InfoRow label="Fecha Ingreso" value={selectedFicha?.fecha_inicio || "—"} />
-                    <InfoRow label="Estado" value={selectedFicha?.estado || "—"} />
-                  </div>
-                </div>
-              </div>
-              {selectedFicha?.notas && (
-                <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-100">
-                  <p className="text-[11px] text-gray-400 uppercase font-semibold mb-1">📝 Notas</p>
-                  <p className="text-sm text-gray-700">{selectedFicha.notas}</p>
+                  {selectedFicha?.notas && (
+                    <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-100">
+                      <p className="text-[11px] text-gray-400 uppercase font-semibold mb-1">Notas</p>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{selectedFicha.notas}</p>
+                    </div>
+                  )}
+                </>
+              ) : form && (
+                /* ─── Vista edición ─── */
+                <div className="space-y-5">
+                  {/* Sección: Datos del Cliente */}
+                  <fieldset className="border border-gray-200 rounded-lg p-4">
+                    <legend className="text-[11px] text-gray-400 uppercase font-semibold px-2">Datos del Cliente</legend>
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField label="Razón Social" value={form.razon_social} onChange={(v) => setForm({ ...form, razon_social: v })} />
+                      <FormField label="Giro" value={form.giro} onChange={(v) => setForm({ ...form, giro: v })} />
+                      <FormField label="Dirección" value={form.direccion} onChange={(v) => setForm({ ...form, direccion: v })} />
+                      <FormField label="Comuna" value={selected.comuna || ""} disabled />
+                      <FormField label="Email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} type="email" />
+                      <FormField label="Teléfono" value={form.telefono} onChange={(v) => setForm({ ...form, telefono: v })} />
+                    </div>
+                  </fieldset>
+
+                  {/* Sección: Datos Comerciales */}
+                  <fieldset className="border border-gray-200 rounded-lg p-4">
+                    <legend className="text-[11px] text-gray-400 uppercase font-semibold px-2">Datos Comerciales</legend>
+                    <div className="grid grid-cols-2 gap-3">
+                      <FormField label="Plan" value={form.plan} onChange={(v) => setForm({ ...form, plan: v })} />
+                      <FormField label="Tarifa (UF)" value={String(form.valor_plan || "")} onChange={(v) => setForm({ ...form, valor_plan: parseFloat(v) || 0 })} type="number" step="0.01" />
+                      <FormSelect label="Facturación" value={form.facturacion_tipo} onChange={(v) => setForm({ ...form, facturacion_tipo: v })} options={["Mes Vencido", "Mes Anticipado"]} />
+                      <FormSelect label="Tipo Documento" value={form.tipo_doc} onChange={(v) => setForm({ ...form, tipo_doc: v })} options={["Factura", "Boleta"]} />
+                      <FormField label="Fecha Inicio" value={form.fecha_inicio} onChange={(v) => setForm({ ...form, fecha_inicio: v })} type="date" />
+                      <FormSelect label="Estado" value={form.estado} onChange={(v) => setForm({ ...form, estado: v })} options={["ACTIVO", "INACTIVO"]} />
+                    </div>
+                  </fieldset>
+
+                  {/* Sección: Notas */}
+                  <fieldset className="border border-gray-200 rounded-lg p-4">
+                    <legend className="text-[11px] text-gray-400 uppercase font-semibold px-2">Notas</legend>
+                    <textarea
+                      value={form.notas}
+                      onChange={(e) => setForm({ ...form, notas: e.target.value })}
+                      rows={3}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#4f46e5] focus:ring-1 focus:ring-[#4f46e5] resize-none"
+                      placeholder="Observaciones del cliente..."
+                    />
+                  </fieldset>
                 </div>
               )}
             </div>
 
-            <div className="border-t border-gray-100 px-6 py-3 flex justify-end bg-[#fafbfd]">
-              <button onClick={() => setSelectedRut(null)} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition">Cerrar</button>
+            {/* Footer con botones */}
+            <div className="border-t border-gray-100 px-6 py-3 flex justify-between bg-[#fafbfd]">
+              <div>
+                {!editando && (
+                  <button
+                    onClick={() => {
+                      setEditando(true);
+                      setMensaje(null);
+                      setForm({
+                        rut: selected.rut,
+                        razon_social: selected.razon_social,
+                        giro: selectedFicha?.giro || selected.giro || "",
+                        direccion: selectedFicha?.direccion || "",
+                        email: selectedFicha?.email || selected.email || "",
+                        telefono: selectedFicha?.telefono || selected.telefono || "",
+                        facturacion_tipo: selectedFicha?.facturacion_tipo || "Mes Vencido",
+                        tipo_doc: selectedFicha?.tipo_doc || "Factura",
+                        plan: selectedFicha?.plan || "",
+                        valor_plan: selectedFicha?.valor_plan || 0,
+                        fecha_inicio: selectedFicha?.fecha_inicio || "",
+                        estado: selectedFicha?.estado || "ACTIVO",
+                        notas: selectedFicha?.notas || "",
+                      });
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-white bg-[#1e1b8a] rounded-lg hover:bg-[#2d2a9e] transition"
+                  >
+                    Editar Ficha
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {editando ? (
+                  <>
+                    <button
+                      onClick={() => { setEditando(false); setForm(null); setMensaje(null); }}
+                      className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition"
+                      disabled={isPending}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!form) return;
+                        startTransition(async () => {
+                          const res = await guardarFicha({ ...form, rut: selected.rut });
+                          if (res.error) {
+                            setMensaje({ tipo: "error", texto: res.error });
+                          } else {
+                            setMensaje({ tipo: "ok", texto: "Ficha guardada correctamente" });
+                            setEditando(false);
+                            setForm(null);
+                          }
+                        });
+                      }}
+                      disabled={isPending}
+                      className="px-5 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition disabled:opacity-50"
+                    >
+                      {isPending ? "Guardando..." : "Guardar"}
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => { setSelectedRut(null); setEditando(false); setForm(null); setMensaje(null); }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition">Cerrar</button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -479,6 +608,38 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-start gap-2">
       <span className="text-xs text-gray-400 w-24 flex-shrink-0">{label}</span>
       <span className="text-sm text-gray-800">{value}</span>
+    </div>
+  );
+}
+
+function FormField({ label, value, onChange, type = "text", disabled, step }: {
+  label: string; value: string; onChange?: (v: string) => void; type?: string; disabled?: boolean; step?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-[11px] text-gray-500 font-medium mb-1">{label}</label>
+      <input
+        type={type} value={value} step={step}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+        disabled={disabled}
+        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#4f46e5] focus:ring-1 focus:ring-[#4f46e5] disabled:bg-gray-50 disabled:text-gray-400"
+      />
+    </div>
+  );
+}
+
+function FormSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: string[];
+}) {
+  return (
+    <div>
+      <label className="block text-[11px] text-gray-500 font-medium mb-1">{label}</label>
+      <select
+        value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#4f46e5] focus:ring-1 focus:ring-[#4f46e5] bg-white"
+      >
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
     </div>
   );
 }

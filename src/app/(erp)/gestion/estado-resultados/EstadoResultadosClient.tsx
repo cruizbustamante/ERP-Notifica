@@ -2,16 +2,18 @@
 
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { crearLibroCorporativo, descargarWorkbook } from "@/lib/excel";
+import YearSelector from "@/components/YearSelector";
 
 type FilaEERR = { codigo: string; nombre: string; tipo: string; nivel: number; porMes: number[]; total: number };
 
 export default function EstadoResultadosClient({
-  anio, filas, totalIngresos, totalGastos,
+  anio, filas, totalIngresos, totalGastos, periodos,
 }: {
   anio: number;
   filas: FilaEERR[];
   totalIngresos: number;
   totalGastos: number;
+  periodos: { anio: number; estado: string }[];
 }) {
   const resultado = totalIngresos - totalGastos;
   const ingresosFilas = filas.filter((f) => f.tipo === "I");
@@ -99,9 +101,12 @@ export default function EstadoResultadosClient({
             <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Estado de Resultados</h1>
             <p className="text-gray-500 mt-1 text-sm">Enero a Diciembre {anio}</p>
           </div>
-          <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 self-start">
-            Descargar Excel
-          </button>
+          <div className="flex items-center gap-2 self-start">
+            <YearSelector anio={anio} periodos={periodos} />
+            <button onClick={descargarExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700">
+              Descargar Excel
+            </button>
+          </div>
         </div>
       </div>
 

@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import CommandCenter from "../../CommandCenter";
 
-export default async function InicioPage() {
+export default async function InicioPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
   const [
     { count: totalComprobantes },
@@ -13,6 +15,7 @@ export default async function InicioPage() {
     { data: ventasPend },
     { data: comprasPend },
     { data: allCartolas },
+    { data: periodos },
   ] = await Promise.all([
     supabase.from("comprobantes").select("*", { count: "exact", head: true }).eq("anio", anio).eq("estado", "VIGENTE"),
     supabase.from("ventas_sii").select("*", { count: "exact", head: true }).eq("anio", anio),
@@ -21,6 +24,7 @@ export default async function InicioPage() {
     supabase.from("ventas_sii").select("id").eq("anio", anio).eq("centralizado", false),
     supabase.from("compras_sii").select("id").eq("anio", anio).eq("centralizado", false),
     supabase.from("cartolas").select("monto, cargo_abono"),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
   ]);
 
   const saldoCtaCte = (allCartolas || []).reduce((s, m) => {
@@ -30,6 +34,7 @@ export default async function InicioPage() {
 
   return (
     <CommandCenter
+      periodos={periodos || []}
       anio={anio}
       stats={{
         comprobantes: totalComprobantes || 0,

@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import RentabilidadClient from "./RentabilidadClient";
 
-export default async function RentabilidadPage() {
+export default async function RentabilidadPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: movs }, { data: cuentas }] = await Promise.all([
+  const [{ data: movs }, { data: cuentas }, { data: periodos }] = await Promise.all([
     supabase
       .from("mov_contables")
       .select("cuenta_codigo, debe, haber, comprobantes!inner(anio, mes, estado)")
@@ -17,6 +19,10 @@ export default async function RentabilidadPage() {
       .eq("estado", "S")
       .in("tipo", ["I", "G"])
       .order("codigo"),
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
   ]);
 
   const cuentaMap = new Map((cuentas || []).map((c) => [c.codigo, c]));
@@ -70,6 +76,7 @@ export default async function RentabilidadPage() {
   return (
     <RentabilidadClient
       anio={anio}
+      periodos={periodos || []}
       ingresosPorMes={ingresosPorMes}
       gastosPorMes={gastosPorMes}
       totalIngresos={totalIngresos}

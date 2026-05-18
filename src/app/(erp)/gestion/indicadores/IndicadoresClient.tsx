@@ -1,6 +1,7 @@
 "use client";
 
 import { formatMonto, formatNumero } from "@/lib/contabilidad/core";
+import YearSelector from "@/components/YearSelector";
 
 type Indicador = {
   nombre: string;
@@ -21,6 +22,7 @@ type Props = {
   ingresos: number;
   gastos: number;
   resultado: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 function formatIndicador(valor: number, formato: string): string {
@@ -45,8 +47,13 @@ export default function IndicadoresClient(props: Props) {
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900">Indicadores Financieros</h1>
-        <p className="text-gray-500 mt-1">Ratios clave — {props.anio}</p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Indicadores Financieros</h1>
+            <p className="text-gray-500 mt-1">Ratios clave — {props.anio}</p>
+          </div>
+          <YearSelector anio={props.anio} periodos={props.periodos} />
+        </div>
       </div>
 
       {/* Balance resumido */}

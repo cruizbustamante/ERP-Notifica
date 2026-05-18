@@ -19,7 +19,9 @@ type Linea = {
   tipo_doc: string;
   num_doc: string;
   fecha_doc: string | null;
-  referencia: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
+  categoria_flujo: string;
 };
 
 type Comprobante = {
@@ -34,12 +36,13 @@ type Comprobante = {
   lineas: Linea[];
 };
 
-type Cuenta = { codigo: string; nombre: string; tipo: string; nivel: number; usa_auxiliar: string; usa_documento: string };
+type Cuenta = { codigo: string; nombre: string; tipo: string; nivel: number; usa_auxiliar: string; usa_documento: string; conciliable: string };
 type TipoDoc = { codigo: string; nombre: string; abreviatura: string };
 type Auxiliar = { rut: string; razon_social: string };
+type CategoriaFlujo = { id: number; codigo: string; nombre: string; tipo: string; flujo: string; orden: number };
 
-export default function DetalleComprobanteClient({ comprobante, cuentas, tiposDoc, auxiliares }: {
-  comprobante: Comprobante; cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[];
+export default function DetalleComprobanteClient({ comprobante, cuentas, tiposDoc, auxiliares, categoriasFlujo }: {
+  comprobante: Comprobante; cuentas: Cuenta[]; tiposDoc: TipoDoc[]; auxiliares: Auxiliar[]; categoriasFlujo: CategoriaFlujo[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -145,6 +148,7 @@ export default function DetalleComprobanteClient({ comprobante, cuentas, tiposDo
           cuentas={cuentas}
           tiposDoc={tiposDoc}
           auxiliares={auxiliares}
+          categoriasFlujo={categoriasFlujo}
           modo="editar"
           initialData={{
             tipo: comprobante.tipo,
@@ -160,7 +164,9 @@ export default function DetalleComprobanteClient({ comprobante, cuentas, tiposDo
               tipo_doc: l.tipo_doc || "",
               num_doc: l.num_doc || "",
               fecha_doc: l.fecha_doc,
-              referencia: l.referencia || "",
+              tipo_doc_ref: l.tipo_doc_ref || "",
+              num_doc_ref: l.num_doc_ref || "",
+              categoria_flujo: l.categoria_flujo || "",
             })),
           }}
           onSubmit={handleSubmit}

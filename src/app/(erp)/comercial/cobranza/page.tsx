@@ -1,12 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import CobranzaClient from "./CobranzaClient";
 
-export default async function CobranzaPage() {
+export default async function CobranzaPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
   const mes = new Date().getMonth() + 1;
 
-  const [{ data: config }, { data: auxiliares }, { data: correos }] = await Promise.all([
+  const [{ data: config }, { data: auxiliares }, { data: correos }, { data: periodos }] = await Promise.all([
     supabase.from("config_contable").select("clave, valor"),
     supabase.from("auxiliares").select("rut, razon_social, email, telefono").eq("estado", "S"),
     supabase
@@ -14,6 +16,7 @@ export default async function CobranzaPage() {
       .select("destinatario_rut, nivel, mes, anio, estado, created_at")
       .eq("tipo", "COBRANZA")
       .eq("anio", anio),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
   ]);
 
   const configMap: Record<string, string> = {};
@@ -22,7 +25,7 @@ export default async function CobranzaPage() {
 
   const { data: movs } = await supabase
     .from("mov_contables")
-    .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, fecha_doc, referencia, comprobantes!inner(estado)")
+    .select("auxiliar_rut, debe, haber, tipo_doc, num_doc, fecha_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
     .eq("cuenta_codigo", ctaCxC)
     .eq("comprobantes.estado", "VIGENTE")
     .neq("tipo_doc", "");
@@ -40,8 +43,9 @@ export default async function CobranzaPage() {
   for (const m of movs || []) {
     if (!m.auxiliar_rut) continue;
     const docKey = `${m.auxiliar_rut}|${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia ? `${m.auxiliar_rut}|${m.referencia}` : docKey;
-    const isReg = !m.referencia || m.referencia === `${m.tipo_doc}|${m.num_doc}`;
+    const hasRef = m.tipo_doc_ref && m.num_doc_ref;
+    const refKey = hasRef ? `${m.auxiliar_rut}|${m.tipo_doc_ref}|${m.num_doc_ref}` : docKey;
+    const isReg = !hasRef;
     const monto = (Number(m.debe) || 0) - (Number(m.haber) || 0);
     const key = isReg ? docKey : refKey;
     const existing = docSaldos.get(key);
@@ -108,6 +112,7 @@ export default async function CobranzaPage() {
 
   return (
     <CobranzaClient
+      periodos={periodos || []}
       clientes={clientes}
       totalDeuda={totalDeuda}
       totalNormal={totalNormal}

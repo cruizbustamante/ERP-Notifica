@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { formatMonto, MESES } from "@/lib/contabilidad/core";
 import { formatRut } from "@/lib/rut";
 import { enviarCorreoFactura, enviarFacturasMasivo, previewFacturaHtml } from "./actions";
+import YearSelector from "@/components/YearSelector";
 
 type Documento = {
   id: number;
@@ -43,6 +44,7 @@ type Props = {
   totalFacturado: number;
   totalNC: number;
   cantDocs: number;
+  periodos: { anio: number; estado: string }[];
 };
 
 const MAPA_DTE: Record<number, string> = {
@@ -52,7 +54,7 @@ const MAPA_DTE: Record<number, string> = {
 
 const TABS = ["Control del Mes", "Documentos", "Historial Correos"] as const;
 
-export default function FacturacionClient({ anio, mesActual, documentos, clientesActivos, correosEnviados, resumenMensual, totalFacturado, totalNC, cantDocs }: Props) {
+export default function FacturacionClient({ anio, mesActual, documentos, clientesActivos, correosEnviados, resumenMensual, totalFacturado, totalNC, cantDocs, periodos }: Props) {
   const [tab, setTab] = useState<typeof TABS[number]>("Control del Mes");
   const [mesControl, setMesControl] = useState(mesActual);
   const [mesFilter, setMesFilter] = useState(0);
@@ -149,8 +151,13 @@ export default function FacturacionClient({ anio, mesActual, documentos, cliente
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
-        <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Facturación</h1>
-        <p className="text-gray-500 mt-1 text-sm">Documentos emitidos y control de envío — {anio}</p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Facturación</h1>
+            <p className="text-gray-500 mt-1 text-sm">Documentos emitidos y control de envío — {anio}</p>
+          </div>
+          <YearSelector anio={anio} periodos={periodos} />
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3 sm:gap-4">

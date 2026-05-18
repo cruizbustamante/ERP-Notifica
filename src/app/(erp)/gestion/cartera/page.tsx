@@ -23,7 +23,7 @@ type ResumenAuxiliar = {
 };
 
 function calcularDocsPendientes(
-  movs: { cuenta_codigo: string; debe: string; haber: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; referencia: string }[],
+  movs: { cuenta_codigo: string; debe: string; haber: string; auxiliar_rut: string; tipo_doc: string; num_doc: string; fecha_doc: string | null; tipo_doc_ref: string; num_doc_ref: string }[],
   cuentaCodigo: string,
   esDeudor: boolean,
   auxiliaresMap: Map<string, string>,
@@ -36,8 +36,9 @@ function calcularDocsPendientes(
     if (!m.tipo_doc || !m.num_doc) continue;
 
     const docKey = `${m.auxiliar_rut}|${m.tipo_doc}|${m.num_doc}`;
-    const refKey = m.referencia ? `${m.auxiliar_rut}|${m.referencia}` : docKey;
-    const isRegistro = !m.referencia || m.referencia === `${m.tipo_doc}|${m.num_doc}`;
+    const hasRef = m.tipo_doc_ref && m.num_doc_ref;
+    const refKey = hasRef ? `${m.auxiliar_rut}|${m.tipo_doc_ref}|${m.num_doc_ref}` : docKey;
+    const isRegistro = !hasRef;
 
     const debe = Number(m.debe) || 0;
     const haber = Number(m.haber) || 0;
@@ -99,7 +100,7 @@ export default async function CarteraPage() {
     supabase.from("config_contable").select("clave, valor"),
     supabase
       .from("mov_contables")
-      .select("cuenta_codigo, debe, haber, auxiliar_rut, tipo_doc, num_doc, fecha_doc, referencia, comprobantes!inner(estado)")
+      .select("cuenta_codigo, debe, haber, auxiliar_rut, tipo_doc, num_doc, fecha_doc, tipo_doc_ref, num_doc_ref, comprobantes!inner(estado)")
       .eq("comprobantes.estado", "VIGENTE")
       .neq("tipo_doc", ""),
     supabase.from("auxiliares").select("rut, razon_social").eq("estado", "S"),
@@ -122,7 +123,8 @@ export default async function CarteraPage() {
     tipo_doc: m.tipo_doc || "",
     num_doc: m.num_doc || "",
     fecha_doc: m.fecha_doc,
-    referencia: m.referencia || "",
+    tipo_doc_ref: m.tipo_doc_ref || "",
+    num_doc_ref: m.num_doc_ref || "",
   }));
 
   const cxc = calcularDocsPendientes(allMovs, ctaCxC, true, auxiliaresMap, hoy);

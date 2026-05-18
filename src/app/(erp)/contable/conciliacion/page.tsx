@@ -14,7 +14,7 @@ export default async function ConciliacionPage() {
       supabase.from("auxiliares").select("rut, razon_social").eq("estado", "S").order("razon_social"),
       supabase.from("cartolas").select("id, fecha, monto, saldo, cargo_abono, contabilizado, mes, descripcion, cuenta_banco").eq("anio", currentYear).order("fecha", { ascending: false }),
       supabase.from("cartolas").select("monto, cargo_abono, cuenta_banco"),
-      supabase.from("categoria_flujo").select("id, codigo, nombre, tipo, orden").eq("estado", "S").order("orden"),
+      supabase.from("categoria_flujo").select("id, codigo, nombre, tipo, flujo, orden").eq("estado", "S").order("orden"),
     ]);
 
   const movimientos = cartolasRaw || [];

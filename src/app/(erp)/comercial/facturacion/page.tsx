@@ -1,15 +1,18 @@
 import { createClient } from "@/lib/supabase/server";
 import FacturacionClient from "./FacturacionClient";
 
-export default async function FacturacionPage() {
+export default async function FacturacionPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
   const mesActual = new Date().getMonth() + 1;
 
   const [
     { data: ventas },
     { data: fichas },
     { data: correos },
+    { data: periodos },
   ] = await Promise.all([
     supabase
       .from("ventas_sii")
@@ -25,6 +28,7 @@ export default async function FacturacionPage() {
       .select("destinatario_rut, folio, mes, anio, estado, created_at")
       .eq("tipo", "FACTURA")
       .eq("anio", anio),
+    supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
   ]);
 
   const documentos = (ventas || []).map((v) => ({
@@ -78,6 +82,7 @@ export default async function FacturacionPage() {
 
   return (
     <FacturacionClient
+      periodos={periodos || []}
       anio={anio}
       mesActual={mesActual}
       documentos={documentos}

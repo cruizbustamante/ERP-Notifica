@@ -50,11 +50,12 @@ const NAV_SECTIONS = [
     href: "/contable/libros-tributarios",
     segment: "informes",
     minRol: "consulta" as Rol,
-    matchPaths: ["/contable/libros-tributarios", "/contable/libro-diario", "/contable/libro-mayor", "/contable/balance", "/gestion/estado-resultados", "/gestion/situacion-financiera", "/gestion/flujo-efectivo"],
+    matchPaths: ["/contable/libros-tributarios", "/contable/libro-diario", "/contable/libro-mayor", "/contable/auxiliares", "/contable/balance", "/gestion/estado-resultados", "/gestion/situacion-financiera", "/gestion/flujo-efectivo"],
     children: [
       { label: "Libros Tributarios", href: "/contable/libros-tributarios" },
       { label: "Libro Diario", href: "/contable/libro-diario" },
       { label: "Libro Mayor", href: "/contable/libro-mayor" },
+      { label: "Informe Auxiliares", href: "/contable/auxiliares" },
       { label: "Balance 8 Columnas", href: "/contable/balance" },
       { label: "Estado de Resultados", href: "/gestion/estado-resultados" },
       { label: "Situación Financiera", href: "/gestion/situacion-financiera" },

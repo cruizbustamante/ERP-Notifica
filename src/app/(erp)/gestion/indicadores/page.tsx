@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import IndicadoresClient from "./IndicadoresClient";
 
-export default async function IndicadoresPage() {
+export default async function IndicadoresPage({ searchParams }: { searchParams: Promise<{ anio?: string }> }) {
   const supabase = await createClient();
-  const anio = new Date().getFullYear();
+  const params = await searchParams;
+  const currentYear = new Date().getFullYear();
+  const anio = params.anio ? Number(params.anio) : currentYear;
 
-  const [{ data: movs }, { data: cuentas }] = await Promise.all([
+  const [{ data: movs }, { data: cuentas }, { data: periodos }] = await Promise.all([
     supabase
       .from("mov_contables")
       .select("cuenta_codigo, debe, haber, comprobantes!inner(anio, estado)")
@@ -16,6 +18,10 @@ export default async function IndicadoresPage() {
       .select("codigo, nombre, tipo, nivel")
       .eq("estado", "S")
       .order("codigo"),
+    supabase
+      .from("periodos")
+      .select("anio, estado")
+      .order("anio", { ascending: false }),
   ]);
 
   const cuentaMap = new Map((cuentas || []).map((c) => [c.codigo, c]));
@@ -152,6 +158,7 @@ export default async function IndicadoresPage() {
   return (
     <IndicadoresClient
       anio={anio}
+      periodos={periodos || []}
       indicadores={indicadores}
       activoCorriente={activoCorriente}
       activoNoCorriente={activoNoCorriente}

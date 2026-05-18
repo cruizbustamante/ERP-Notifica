@@ -3,6 +3,7 @@
 import { useState, useTransition, useCallback } from "react";
 import { formatRut } from "@/lib/rut";
 import { MESES } from "@/lib/contabilidad/core";
+import YearSelector from "@/components/YearSelector";
 import {
   cargarTransacciones,
   getTransacciones,
@@ -66,16 +67,22 @@ function fmt(n: number) {
 const TABS = ["Dashboard", "Receptores", "Transacciones", "Boletas", "Negocio", "Carga"] as const;
 type Tab = typeof TABS[number];
 
+type Auxiliar = { rut: string; nombre: string; email: string };
+
 export default function MarketplaceClient({
   transaccionesIniciales,
   receptores,
+  auxiliares,
   kpis,
   anio,
+  periodos,
 }: {
   transaccionesIniciales: Transaccion[];
   receptores: Receptor[];
+  auxiliares: Auxiliar[];
   kpis: KPIs;
   anio: number;
+  periodos: { anio: number; estado: string }[];
 }) {
   const [transacciones, setTransacciones] = useState(transaccionesIniciales);
   const [vista, setVista] = useState<Tab>("Dashboard");
@@ -154,8 +161,13 @@ export default function MarketplaceClient({
     <div className="space-y-4">
       {/* Header */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6">
-        <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Marketplace</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Dashboard CFO — {anio}</p>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900">Marketplace</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Dashboard CFO — {anio}</p>
+          </div>
+          <YearSelector anio={anio} periodos={periodos} />
+        </div>
       </div>
 
       {/* Tabs */}
@@ -409,7 +421,7 @@ export default function MarketplaceClient({
       )}
 
       {/* ═══ TAB: Carga ═══ */}
-      {vista === "Carga" && <CargaPanel onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); setVista("Transacciones"); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />}
+      {vista === "Carga" && <CargaPanel auxiliares={auxiliares} onSuccess={(msg) => { setMensaje({ tipo: "ok", texto: msg }); setVista("Transacciones"); }} onError={(msg) => setMensaje({ tipo: "error", texto: msg })} />}
 
       {/* Modal pago */}
       {showPagoModal && (
@@ -702,45 +714,141 @@ function PagoModal({ cantidad, onConfirm, onClose }: { cantidad: number; onConfi
   );
 }
 
-function CargaPanel({ onSuccess, onError }: { onSuccess: (msg: string) => void; onError: (msg: string) => void }) {
+function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]; onSuccess: (msg: string) => void; onError: (msg: string) => void }) {
   const [archivo, setArchivo] = useState<File | null>(null);
   const [preview, setPreview] = useState<TransaccionInput[]>([]);
   const [cargando, setCargando] = useState(false);
+  const [stats, setStats] = useState<{ total: number; sinRut: number; plataformas: Record<string, number> } | null>(null);
+
+  function normalizarRut(rut: string): string {
+    return rut.replace(/\./g, "").replace(/[–—]/g, "-").trim();
+  }
+
+  function resolverReceptor(configRut: string, receptorEmail: string): { rut: string; nombre: string } {
+    const rutNorm = normalizarRut(configRut);
+    const porRut = auxiliares.find((a) => a.rut === rutNorm);
+    if (porRut) return { rut: porRut.rut, nombre: porRut.nombre };
+    const porEmail = receptorEmail ? auxiliares.find((a) => a.email && a.email.toLowerCase() === receptorEmail.toLowerCase()) : null;
+    if (porEmail) return { rut: porEmail.rut, nombre: porEmail.nombre };
+    return { rut: rutNorm, nombre: receptorEmail.split("@")[0] };
+  }
+
+  function extraerRutDeConfig(config: string): string {
+    const m = config.match(/['"]rut['"]\s*:\s*['"]([^'"]+)['"]/);
+    if (!m) return "";
+    return m[1].replace(/\./g, "").replace(/[–—]/g, "-");
+  }
 
   const handleFile = useCallback(async (file: File) => {
     setArchivo(file);
+    setStats(null);
     try {
-      const text = await file.text();
-      const lines = text.trim().split("\n");
-      const header = lines[0].toLowerCase();
-      const sep = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ",";
-      const cols = lines[0].split(sep).map((c) => c.trim().toLowerCase().replace(/['"]/g, ""));
+      const isExcel = /\.xlsx?$/i.test(file.name);
 
-      const idxOrden = cols.findIndex((c) => c.includes("orden") || c.includes("order") || c.includes("id"));
-      const idxFecha = cols.findIndex((c) => c.includes("fecha") || c.includes("date"));
-      const idxRut = cols.findIndex((c) => c.includes("rut"));
-      const idxNombre = cols.findIndex((c) => c.includes("nombre") || c.includes("receptor") || c.includes("comercio"));
-      const idxMonto = cols.findIndex((c) => c.includes("monto") || c.includes("amount") || c.includes("total"));
+      if (isExcel) {
+        const XLSX = await import("xlsx");
+        const buffer = await file.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
 
-      if (idxOrden < 0 || idxFecha < 0 || idxMonto < 0) { onError("Archivo inválido: se requieren columnas orden/id, fecha y monto"); return; }
+        const rows: TransaccionInput[] = [];
+        let sinRut = 0;
+        const plataformas: Record<string, number> = {};
 
-      const rows: TransaccionInput[] = [];
-      for (let i = 1; i < lines.length; i++) {
-        const vals = lines[i].split(sep).map((v) => v.trim().replace(/['"]/g, ""));
-        if (!vals[idxOrden]) continue;
-        const montoStr = vals[idxMonto].replace(/[$.]/g, "").replace(",", ".");
-        const monto = Math.round(Number(montoStr));
-        if (!monto || monto < 1000) continue;
-        let fecha = vals[idxFecha];
-        if (fecha.includes("/")) {
-          const parts = fecha.split("/");
-          fecha = parts.length === 3 ? `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}` : fecha;
+        for (const row of data) {
+          const id = String(row["id"] ?? "");
+          if (!id) continue;
+
+          const totalAmount = Number(row["totalAmount"] ?? 0);
+          const amount = Number(row["amount"] ?? 0);
+          const monto = totalAmount || Math.round(amount * 1.15);
+          if (monto < 100) continue;
+
+          const config = String(row["config"] ?? "");
+          const rut = extraerRutDeConfig(config);
+          if (!rut) sinRut++;
+
+          const pm = String(row["paymentMethod"] ?? "").toLowerCase();
+          const plataforma = pm.includes("mercado") ? "MP" : "TBK";
+          plataformas[plataforma] = (plataformas[plataforma] || 0) + 1;
+
+          let fecha = "";
+          const rawDate = row["transactionDate"];
+          if (rawDate instanceof Date) {
+            fecha = rawDate.toISOString().slice(0, 10);
+          } else if (typeof rawDate === "string") {
+            const isoMatch = rawDate.match(/\d{4}-\d{2}-\d{2}/);
+            fecha = isoMatch ? isoMatch[0] : rawDate.slice(0, 10);
+          }
+          if (!fecha) continue;
+
+          const receptorEmail = String(row["receptor"] ?? "");
+          const resolved = resolverReceptor(rut, receptorEmail);
+
+          const idTbk = String(row["id_tbk"] ?? "");
+          const idMp = String(row["id_mp"] ?? "");
+          const cardType = String(row["cardType"] ?? row["card_type"] ?? "");
+
+          rows.push({
+            orden_id: id,
+            fecha_transaccion: fecha,
+            receptor_rut: resolved.rut,
+            receptor_nombre: resolved.nombre,
+            monto_bruto: monto,
+            plataforma,
+            id_tbk: idTbk || undefined,
+            id_mp: idMp || undefined,
+            card_type: cardType || undefined,
+          });
         }
-        rows.push({ orden_id: vals[idxOrden], fecha_transaccion: fecha, receptor_rut: idxRut >= 0 ? vals[idxRut].replace(/\./g, "") : "", receptor_nombre: idxNombre >= 0 ? vals[idxNombre] : "", monto_bruto: monto });
+
+        setPreview(rows);
+        setStats({ total: data.length, sinRut, plataformas });
+        if (rows.length === 0) onError("No se encontraron transacciones válidas en el archivo Excel");
+      } else {
+        const text = await file.text();
+        const lines = text.trim().split("\n");
+        const header = lines[0].toLowerCase();
+        const sep = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ",";
+        const cols = lines[0].split(sep).map((c) => c.trim().toLowerCase().replace(/['"]/g, ""));
+
+        const idxOrden = cols.findIndex((c) => c.includes("orden") || c.includes("order") || c.includes("id"));
+        const idxFecha = cols.findIndex((c) => c.includes("fecha") || c.includes("date"));
+        const idxRut = cols.findIndex((c) => c.includes("rut"));
+        const idxNombre = cols.findIndex((c) => c.includes("nombre") || c.includes("receptor") || c.includes("comercio"));
+        const idxMonto = cols.findIndex((c) => c.includes("monto") || c.includes("amount") || c.includes("total"));
+
+        if (idxOrden < 0 || idxFecha < 0 || idxMonto < 0) { onError("Archivo inválido: se requieren columnas orden/id, fecha y monto"); return; }
+
+        const rows: TransaccionInput[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          const vals = lines[i].split(sep).map((v) => v.trim().replace(/['"]/g, ""));
+          if (!vals[idxOrden]) continue;
+          const montoStr = vals[idxMonto].replace(/[$.]/g, "").replace(",", ".");
+          const monto = Math.round(Number(montoStr));
+          if (!monto || monto < 1000) continue;
+          let fecha = vals[idxFecha];
+          if (fecha.includes("/")) {
+            const parts = fecha.split("/");
+            fecha = parts.length === 3 ? `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}` : fecha;
+          }
+          const rutVal = idxRut >= 0 ? vals[idxRut].replace(/\./g, "") : "";
+          const csvResolved = resolverReceptor(rutVal, "");
+          rows.push({
+            orden_id: vals[idxOrden],
+            fecha_transaccion: fecha,
+            receptor_rut: csvResolved.rut || rutVal,
+            receptor_nombre: csvResolved.nombre || (idxNombre >= 0 ? vals[idxNombre] : ""),
+            monto_bruto: monto,
+          });
+        }
+        setPreview(rows);
       }
-      setPreview(rows);
     } catch { onError("Error al procesar el archivo"); }
-  }, [onError]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onError, auxiliares]);
 
   async function handleCargar() {
     if (preview.length === 0) return;
@@ -748,46 +856,66 @@ function CargaPanel({ onSuccess, onError }: { onSuccess: (msg: string) => void; 
     const result = await cargarTransacciones(preview);
     setCargando(false);
     if (result.error) onError(result.error);
-    else { onSuccess(`${result.insertados} transacciones cargadas (lote: ${result.lote})`); setPreview([]); setArchivo(null); }
+    else { onSuccess(`${result.insertados} transacciones cargadas (lote: ${result.lote})`); setPreview([]); setArchivo(null); setStats(null); }
   }
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
       <h3 className="text-base font-bold text-gray-900">Cargar transacciones</h3>
-      <p className="text-sm text-gray-500">Sube un archivo CSV/TXT con las transacciones del marketplace.</p>
+      <p className="text-sm text-gray-500">Sube el archivo Excel (.xlsx) o CSV con las transacciones del marketplace.</p>
       <div onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); }}
         onDragOver={(e) => e.preventDefault()}
         className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:border-indigo-300 transition cursor-pointer"
         onClick={() => document.getElementById("mkt-file-input")?.click()}>
-        <input id="mkt-file-input" type="file" accept=".csv,.txt,.tsv" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
+        <input id="mkt-file-input" type="file" accept=".xlsx,.xls,.csv,.txt,.tsv" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
         <svg className="w-10 h-10 mx-auto text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
-        <p className="mt-2 text-sm text-gray-500">{archivo ? archivo.name : "Arrastra un archivo o haz clic"}</p>
+        <p className="mt-2 text-sm text-gray-500">{archivo ? archivo.name : "Arrastra un archivo Excel o CSV"}</p>
+        <p className="text-xs text-gray-400 mt-1">Formatos: .xlsx, .csv, .txt</p>
       </div>
+
+      {stats && preview.length > 0 && (
+        <div className="flex flex-wrap gap-3 text-xs">
+          <span className="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg font-medium">{preview.length} transacciones</span>
+          {Object.entries(stats.plataformas).map(([p, n]) => (
+            <span key={p} className={`px-3 py-1.5 rounded-lg font-medium ${p === "TBK" ? "bg-orange-50 text-orange-700" : "bg-sky-50 text-sky-700"}`}>
+              {p === "TBK" ? "Transbank" : "Mercado Pago"}: {n}
+            </span>
+          ))}
+          {stats.sinRut > 0 && <span className="bg-red-50 text-red-700 px-3 py-1.5 rounded-lg font-medium">{stats.sinRut} sin RUT</span>}
+        </div>
+      )}
 
       {preview.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">{preview.length} transacciones detectadas</span>
+            <span className="text-sm font-medium">{preview.length} transacciones listas para cargar</span>
             <button onClick={handleCargar} disabled={cargando} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-sm font-medium disabled:opacity-50">
               {cargando ? "Cargando..." : "Confirmar carga"}
             </button>
           </div>
-          <div className="overflow-x-auto max-h-64 border rounded-lg">
+          <div className="overflow-x-auto max-h-80 border rounded-lg">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-50">
                 <tr className="text-left text-gray-500">
-                  <th className="px-3 py-2">Orden</th><th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Receptor</th>
-                  <th className="px-3 py-2 text-right">Monto</th><th className="px-3 py-2 text-right">Base</th><th className="px-3 py-2 text-right">Comisión</th>
+                  <th className="px-3 py-2">ID</th><th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Receptor</th>
+                  <th className="px-3 py-2">RUT</th><th className="px-3 py-2 text-center">Plat.</th>
+                  <th className="px-3 py-2 text-right">Bruto</th><th className="px-3 py-2 text-right">Base</th><th className="px-3 py-2 text-right">Comisión</th>
                 </tr>
               </thead>
               <tbody>
-                {preview.slice(0, 20).map((t, i) => {
+                {preview.slice(0, 30).map((t, i) => {
                   const base = Math.round(t.monto_bruto / 1.15);
                   return (
                     <tr key={i} className="border-t border-gray-100">
-                      <td className="px-3 py-1.5 font-mono">{t.orden_id}</td>
+                      <td className="px-3 py-1.5 font-mono text-indigo-700">{t.orden_id}</td>
                       <td className="px-3 py-1.5">{t.fecha_transaccion}</td>
-                      <td className="px-3 py-1.5">{t.receptor_nombre || t.receptor_rut}</td>
+                      <td className="px-3 py-1.5 font-medium">{t.receptor_nombre}</td>
+                      <td className="px-3 py-1.5 font-mono text-gray-500">{t.receptor_rut ? formatRut(t.receptor_rut) : <span className="text-red-400">—</span>}</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${t.plataforma === "TBK" ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700"}`}>
+                          {t.plataforma === "TBK" ? "TBK" : "MP"}
+                        </span>
+                      </td>
                       <td className="px-3 py-1.5 text-right font-mono">${fmt(t.monto_bruto)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-amber-700">${fmt(base)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-indigo-600">${fmt(t.monto_bruto - base)}</td>
@@ -796,7 +924,7 @@ function CargaPanel({ onSuccess, onError }: { onSuccess: (msg: string) => void; 
                 })}
               </tbody>
             </table>
-            {preview.length > 20 && <div className="px-3 py-2 text-center text-gray-400 text-xs bg-gray-50">... y {preview.length - 20} más</div>}
+            {preview.length > 30 && <div className="px-3 py-2 text-center text-gray-400 text-xs bg-gray-50">... y {preview.length - 30} más</div>}
           </div>
         </div>
       )}

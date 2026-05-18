@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import YearSelector from "@/components/YearSelector";
 
 type Props = {
   anio: number;
+  periodos: { anio: number; estado: string }[];
   stats: {
     comprobantes: number;
     ventas: number;
@@ -23,15 +25,18 @@ const ACCIONES_RAPIDAS = [
   { label: "Cobranza", href: "/comercial/cobranza", icon: "💰" },
 ];
 
-export default function CommandCenter({ anio, stats }: Props) {
+export default function CommandCenter({ anio, periodos, stats }: Props) {
   const pendientes = stats.ventasPendiente + stats.comprasPendiente + stats.cartolaPendiente;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-[#1e1b4b]">📊 Centro de Comando</h1>
-        <p className="text-sm text-gray-500 mt-1">Notifica Legal SpA — Período {anio}</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-[#1e1b4b]">📊 Centro de Comando</h1>
+          <p className="text-sm text-gray-500 mt-1">Notifica Legal SpA — Período {anio}</p>
+        </div>
+        <YearSelector anio={anio} periodos={periodos} />
       </div>
 
       {/* KPIs */}
