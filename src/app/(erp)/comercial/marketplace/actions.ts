@@ -4,8 +4,42 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { requireRol } from "@/lib/auth";
 
-const COMISION_NL = 0.15;
 const IVA = 0.19;
+
+const TASAS_DEFAULT = {
+  MKT_COMISION_NL: 15,
+  MKT_TASA_TBK_DEBITO: 1.49,
+  MKT_TASA_TBK_CREDITO: 2.49,
+  MKT_TASA_MP: 3.19,
+};
+
+async function getTasas() {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("config")
+    .select("clave, valor")
+    .in("clave", Object.keys(TASAS_DEFAULT));
+  const map: Record<string, number> = {};
+  for (const d of data || []) map[d.clave] = Number(d.valor);
+  return {
+    comisionNL: (map.MKT_COMISION_NL ?? TASAS_DEFAULT.MKT_COMISION_NL) / 100,
+    tbkDebito: (map.MKT_TASA_TBK_DEBITO ?? TASAS_DEFAULT.MKT_TASA_TBK_DEBITO) / 100,
+    tbkCredito: (map.MKT_TASA_TBK_CREDITO ?? TASAS_DEFAULT.MKT_TASA_TBK_CREDITO) / 100,
+    mp: (map.MKT_TASA_MP ?? TASAS_DEFAULT.MKT_TASA_MP) / 100,
+  };
+}
+
+function calcularCostoPlataforma(monto: number, plataforma: string, cardType: string, tasas: Awaited<ReturnType<typeof getTasas>>) {
+  let tasaNeta: number;
+  if (plataforma === "MP") {
+    tasaNeta = tasas.mp;
+  } else if (cardType && (cardType.toLowerCase().includes("créd") || cardType.toLowerCase().includes("cred"))) {
+    tasaNeta = tasas.tbkCredito;
+  } else {
+    tasaNeta = tasas.tbkDebito;
+  }
+  return Math.round(monto * tasaNeta * (1 + IVA));
+}
 
 export type TransaccionRow = {
   id: number;
@@ -42,8 +76,8 @@ export type TransaccionInput = {
   card_type?: string;
 };
 
-function calcularDesglose(monto: number) {
-  const base_receptor = Math.round(monto / (1 + COMISION_NL));
+function calcularDesglose(monto: number, comisionNL: number) {
+  const base_receptor = Math.round(monto / (1 + comisionNL));
   const comision_nl_bruta = monto - base_receptor;
   const comision_nl_neta = Math.round(comision_nl_bruta / (1 + IVA));
   const iva_comision = comision_nl_bruta - comision_nl_neta;
@@ -53,10 +87,12 @@ function calcularDesglose(monto: number) {
 export async function cargarTransacciones(transacciones: TransaccionInput[]) {
   await requireRol("comercial");
   const supabase = await createClient();
+  const tasas = await getTasas();
   const lote = `CARGA-${Date.now()}`;
 
   const rows = transacciones.map((t) => {
-    const desglose = calcularDesglose(t.monto_bruto);
+    const desglose = calcularDesglose(t.monto_bruto, tasas.comisionNL);
+    const costoPlat = calcularCostoPlataforma(t.monto_bruto, t.plataforma || "TBK", t.card_type || "", tasas);
     return {
       orden_id: t.orden_id,
       fecha_transaccion: t.fecha_transaccion,
@@ -67,8 +103,8 @@ export async function cargarTransacciones(transacciones: TransaccionInput[]) {
       comision_nl_bruta: desglose.comision_nl_bruta,
       comision_nl_neta: desglose.comision_nl_neta,
       iva_comision: desglose.iva_comision,
-      costo_tbk: t.costo_tbk || 0,
-      costo_plataforma: t.costo_plataforma || t.costo_tbk || 0,
+      costo_tbk: costoPlat,
+      costo_plataforma: costoPlat,
       plataforma: t.plataforma || "TBK",
       id_tbk: t.id_tbk || null,
       id_mp: t.id_mp || null,
@@ -385,4 +421,37 @@ export async function getRentabilidadPorPlataforma(): Promise<{ data: Rentabilid
   }
 
   return { data: Object.values(mapa), error: null };
+}
+
+export async function recalcularCostos() {
+  await requireRol("admin");
+  const supabase = await createClient();
+  const tasas = await getTasas();
+
+  const { data, error } = await supabase
+    .from("marketplace_transacciones")
+    .select("id, monto_bruto, plataforma, card_type");
+
+  if (error) return { error: error.message, actualizados: 0 };
+
+  let actualizados = 0;
+  for (const t of data || []) {
+    const desglose = calcularDesglose(Number(t.monto_bruto), tasas.comisionNL);
+    const costoPlat = calcularCostoPlataforma(Number(t.monto_bruto), t.plataforma || "TBK", t.card_type || "", tasas);
+    const { error: updErr } = await supabase
+      .from("marketplace_transacciones")
+      .update({
+        base_receptor: desglose.base_receptor,
+        comision_nl_bruta: desglose.comision_nl_bruta,
+        comision_nl_neta: desglose.comision_nl_neta,
+        iva_comision: desglose.iva_comision,
+        costo_plataforma: costoPlat,
+        costo_tbk: costoPlat,
+      })
+      .eq("id", t.id);
+    if (!updErr) actualizados++;
+  }
+
+  revalidatePath("/comercial/marketplace");
+  return { error: null, actualizados };
 }

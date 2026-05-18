@@ -365,6 +365,7 @@ export default function MarketplaceClient({
                     <th className="px-3 py-2.5 text-right font-medium">Bruto</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Base</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden md:table-cell">Comisión</th>
+                    <th className="px-3 py-2.5 text-right font-medium hidden lg:table-cell">Costo Plat.</th>
                     <th className="px-3 py-2.5 text-center font-medium">Estado</th>
                   </tr>
                 </thead>
@@ -381,12 +382,13 @@ export default function MarketplaceClient({
                       <td className="px-3 py-2.5 text-right font-mono text-xs">${fmt(Number(t.monto_bruto))}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-amber-700 hidden sm:table-cell">${fmt(Number(t.base_receptor))}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-xs text-indigo-600 hidden md:table-cell">${fmt(Number(t.comision_nl_neta))}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs text-red-500 hidden lg:table-cell">{Number(t.costo_plataforma) > 0 ? `-$${fmt(Number(t.costo_plataforma))}` : "—"}</td>
                       <td className="px-3 py-2.5 text-center">
                         <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${t.estado === "PENDIENTE" ? "bg-amber-100 text-amber-700" : t.estado === "PAGADO" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{t.estado}</span>
                       </td>
                     </tr>
                   ))}
-                  {filtradas.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin transacciones</td></tr>}
+                  {filtradas.length === 0 && <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin transacciones</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -900,11 +902,14 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
                   <th className="px-3 py-2">ID</th><th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Receptor</th>
                   <th className="px-3 py-2">RUT</th><th className="px-3 py-2 text-center">Plat.</th>
                   <th className="px-3 py-2 text-right">Bruto</th><th className="px-3 py-2 text-right">Base</th><th className="px-3 py-2 text-right">Comisión</th>
+                  <th className="px-3 py-2 text-right">Costo Plat.</th>
                 </tr>
               </thead>
               <tbody>
                 {preview.slice(0, 30).map((t, i) => {
                   const base = Math.round(t.monto_bruto / 1.15);
+                  const tasaPlat = t.plataforma === "MP" ? 0.0319 : (t.card_type?.toLowerCase().includes("créd") || t.card_type?.toLowerCase().includes("cred")) ? 0.0249 : 0.0149;
+                  const costoPlat = Math.round(t.monto_bruto * tasaPlat * 1.19);
                   return (
                     <tr key={i} className="border-t border-gray-100">
                       <td className="px-3 py-1.5 font-mono text-indigo-700">{t.orden_id}</td>
@@ -919,6 +924,7 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
                       <td className="px-3 py-1.5 text-right font-mono">${fmt(t.monto_bruto)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-amber-700">${fmt(base)}</td>
                       <td className="px-3 py-1.5 text-right font-mono text-indigo-600">${fmt(t.monto_bruto - base)}</td>
+                      <td className="px-3 py-1.5 text-right font-mono text-red-500">-${fmt(costoPlat)}</td>
                     </tr>
                   );
                 })}

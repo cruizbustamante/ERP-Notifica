@@ -22,6 +22,7 @@ type Usuario = { id: number; user_id: string; email: string; rol: string; nombre
 
 const TABS = [
   { key: "empresa", label: "Empresa" },
+  { key: "marketplace", label: "Marketplace" },
   { key: "centralizacion", label: "Centralización" },
   { key: "categorias", label: "Categorías Flujo" },
   { key: "documentos", label: "Tipos Documento" },
@@ -78,6 +79,11 @@ export default function ConfigClient({
       {/* Tab: Empresa */}
       {tab === "empresa" && (
         <TabEmpresa config={config} isPending={isPending} startTransition={startTransition} showMsg={showMsg} />
+      )}
+
+      {/* Tab: Marketplace */}
+      {tab === "marketplace" && (
+        <TabMarketplace config={config} isPending={isPending} startTransition={startTransition} showMsg={showMsg} />
       )}
 
       {/* Tab: Centralización */}
@@ -157,6 +163,90 @@ function TabEmpresa({ config, isPending, startTransition, showMsg }: {
       <div className="flex justify-end">
         <button onClick={guardar} disabled={isPending} className="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
           {isPending ? "Guardando..." : "Guardar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab Marketplace ──────────────────────────────────────────────────
+
+function TabMarketplace({ config, isPending, startTransition, showMsg }: {
+  config: Record<string, string>;
+  isPending: boolean;
+  startTransition: React.TransitionStartFunction;
+  showMsg: (t: "ok" | "error", m: string) => void;
+}) {
+  const campos = [
+    { clave: "MKT_COMISION_NL", label: "Comisión NL (%)", default: "15", desc: "Porcentaje que cobra Notifica Legal sobre el monto bruto" },
+    { clave: "MKT_TASA_TBK_DEBITO", label: "Tasa TBK Débito (% neto)", default: "1.49", desc: "Comisión Transbank tarjeta débito (se aplica +IVA)" },
+    { clave: "MKT_TASA_TBK_CREDITO", label: "Tasa TBK Crédito (% neto)", default: "2.49", desc: "Comisión Transbank tarjeta crédito (se aplica +IVA)" },
+    { clave: "MKT_TASA_MP", label: "Tasa Mercado Pago (% neto)", default: "3.19", desc: "Comisión Mercado Pago (se aplica +IVA)" },
+  ];
+
+  const [valores, setValores] = useState<Record<string, string>>(
+    Object.fromEntries(campos.map((c) => [c.clave, config[c.clave] || c.default]))
+  );
+  const [recalculando, setRecalculando] = useState(false);
+
+  const guardar = () => {
+    startTransition(async () => {
+      for (const [clave, valor] of Object.entries(valores)) {
+        const res = await updateConfig(clave, valor);
+        if (res.error) { showMsg("error", res.error); return; }
+      }
+      showMsg("ok", "Tasas marketplace guardadas");
+    });
+  };
+
+  const handleRecalcular = async () => {
+    setRecalculando(true);
+    const { recalcularCostos } = await import("@/app/(erp)/comercial/marketplace/actions");
+    const res = await recalcularCostos();
+    setRecalculando(false);
+    if (res.error) showMsg("error", res.error);
+    else showMsg("ok", `${res.actualizados} transacciones recalculadas con las tasas actuales`);
+  };
+
+  const tasaConIva = (v: string) => (Number(v) * 1.19).toFixed(4);
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sm:p-6 space-y-5">
+      <div>
+        <h3 className="font-semibold text-gray-900">Tasas Marketplace</h3>
+        <p className="text-sm text-gray-500 mt-1">Comisiones de plataforma aplicadas al cargar transacciones. Las tasas netas se multiplican por 1.19 (IVA) para obtener el costo total.</p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {campos.map((c) => (
+          <div key={c.clave} className="space-y-1">
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide">{c.label}</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                step="0.01"
+                value={valores[c.clave]}
+                onChange={(e) => setValores((p) => ({ ...p, [c.clave]: e.target.value }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"
+              />
+              <span className="text-xs text-gray-400 whitespace-nowrap">%</span>
+            </div>
+            <p className="text-[11px] text-gray-400">{c.desc}</p>
+            {c.clave !== "MKT_COMISION_NL" && (
+              <p className="text-[11px] text-indigo-500 font-mono">Con IVA: {tasaConIva(valores[c.clave])}%</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between pt-2 border-t border-gray-100 flex-wrap gap-3">
+        <button onClick={handleRecalcular} disabled={recalculando || isPending}
+          className="text-sm text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition">
+          {recalculando ? "Recalculando..." : "Recalcular todas las transacciones"}
+        </button>
+        <button onClick={guardar} disabled={isPending}
+          className="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+          {isPending ? "Guardando..." : "Guardar tasas"}
         </button>
       </div>
     </div>
