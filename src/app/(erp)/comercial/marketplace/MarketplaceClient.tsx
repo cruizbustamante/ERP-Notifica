@@ -878,8 +878,9 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
           const monto = totalAmount || Math.round(amount * 1.15);
           if (monto < 100) continue;
 
+          const rutDirecto = String(row["rut_receptor"] ?? "");
           const config = String(row["config"] ?? "");
-          const rut = extraerRutDeConfig(config);
+          const rut = rutDirecto ? normalizarRut(rutDirecto) : extraerRutDeConfig(config);
           if (!rut) sinRut++;
 
           const pm = String(row["paymentMethod"] ?? "").toLowerCase();
