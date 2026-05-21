@@ -9,14 +9,11 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
   const anio = params.anio ? Number(params.anio) : currentYear;
 
   // Reparar receptores cuyo tipo fue sobreescrito a "CLIENTE" por guardarFicha
-  const { data: clienteTipos } = await supabase.from("auxiliares").select("rut").eq("tipo", "CLIENTE");
-  if (clienteTipos && clienteTipos.length > 0) {
-    const rutsCliente = clienteTipos.map((a) => a.rut);
-    const { data: mktRecs } = await supabase.from("marketplace_transacciones").select("receptor_rut").in("receptor_rut", rutsCliente);
-    const receptorRuts = [...new Set((mktRecs || []).map((t) => t.receptor_rut))];
-    if (receptorRuts.length > 0) {
-      await supabase.from("auxiliares").update({ tipo: "RECEPTOR" }).in("rut", receptorRuts);
-    }
+  // Todos los que tienen ficha_comercial son receptores (únicos con suscripción)
+  const { data: fichaRuts } = await supabase.from("ficha_comercial").select("rut");
+  if (fichaRuts && fichaRuts.length > 0) {
+    const ruts = fichaRuts.map((f) => f.rut);
+    await supabase.from("auxiliares").update({ tipo: "RECEPTOR" }).eq("tipo", "CLIENTE").in("rut", ruts);
   }
 
   const [{ data: auxiliares }, { data: fichas }, { data: ventas }, { data: movsCxC }, { data: periodos }] = await Promise.all([
