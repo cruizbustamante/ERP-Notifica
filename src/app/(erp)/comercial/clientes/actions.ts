@@ -74,3 +74,39 @@ export async function guardarFicha(data: FichaUpdate) {
   revalidatePath("/comercial/clientes");
   return { error: null };
 }
+
+export type AuxiliarUpdate = {
+  rut: string;
+  razon_social: string;
+  tipo: string;
+  giro?: string;
+  direccion?: string;
+  comuna?: string;
+  telefono?: string;
+  email?: string;
+  estudio_rut?: string;
+};
+
+export async function guardarAuxiliar(data: AuxiliarUpdate) {
+  await requireRol("comercial");
+  const supabase = await createClient();
+  const rut = normalizeRut(data.rut);
+  if (!rut) return { error: "RUT inválido" };
+
+  const { error } = await supabase.from("auxiliares").upsert({
+    rut,
+    razon_social: data.razon_social,
+    tipo: data.tipo,
+    giro: data.giro || "",
+    direccion: data.direccion || "",
+    comuna: data.comuna || "",
+    telefono: data.telefono || "",
+    email: data.email || "",
+    estudio_rut: data.estudio_rut ? normalizeRut(data.estudio_rut) : "",
+    estado: "S",
+  }, { onConflict: "rut" });
+
+  if (error) return { error: error.message };
+  revalidatePath("/comercial/clientes");
+  return { error: null };
+}

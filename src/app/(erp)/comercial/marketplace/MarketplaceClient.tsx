@@ -41,6 +41,16 @@ type Transaccion = {
   lote_carga: string | null;
   boleta_emitida?: boolean;
   boleta_folio?: string;
+  comprador_rut: string | null;
+  comprador_nombre: string | null;
+  abogado_rut: string | null;
+  abogado_nombre: string | null;
+  estudio_rut: string | null;
+  estudio_nombre: string | null;
+  giro_billing: string | null;
+  direccion_billing: string | null;
+  comuna_billing: string | null;
+  email_billing: string | null;
 };
 
 type Receptor = { rut: string; nombre: string };
@@ -893,6 +903,22 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
           const idMp = String(row["id_mp"] ?? "");
           const cardType = String(row["cardType"] ?? row["card_type"] ?? "");
 
+          // Datos de facturación (estudio)
+          const estudioRut = String(row["rut_billing"] ?? row["estudio_rut"] ?? "");
+          const estudioNombre = String(row["razonsocial_billing"] ?? row["estudio_nombre"] ?? "");
+          const giroBilling = String(row["giro_billing"] ?? row["giro"] ?? "");
+          const direccionBilling = String(row["direccion_billing"] ?? row["direccion"] ?? "");
+          const comunaBilling = String(row["comuna_billing"] ?? "");
+          const emailBilling = String(row["email_billing"] ?? "");
+
+          // Datos personales (abogado)
+          const abogadoRut = String(row["rut_personal"] ?? row["abogado_rut"] ?? "");
+          const abogadoNombre = String(row["nombre_personal"] ?? row["abogado_nombre"] ?? "");
+
+          // Comprador = estudio (entidad facturación)
+          const compradorRut = estudioRut || String(row["buyerRut"] ?? row["comprador_rut"] ?? row["clientRut"] ?? "");
+          const compradorNombre = estudioNombre || String(row["buyerName"] ?? row["comprador_nombre"] ?? row["clientName"] ?? row["buyer"] ?? "");
+
           rows.push({
             orden_id: id,
             fecha_transaccion: fecha,
@@ -903,6 +929,16 @@ function CargaPanel({ auxiliares, onSuccess, onError }: { auxiliares: Auxiliar[]
             id_tbk: idTbk || undefined,
             id_mp: idMp || undefined,
             card_type: cardType || undefined,
+            comprador_rut: compradorRut ? normalizarRut(compradorRut) : undefined,
+            comprador_nombre: compradorNombre.trim() || undefined,
+            abogado_rut: abogadoRut ? normalizarRut(abogadoRut) : undefined,
+            abogado_nombre: abogadoNombre.trim() || undefined,
+            estudio_rut: estudioRut ? normalizarRut(estudioRut) : undefined,
+            estudio_nombre: estudioNombre.trim() || undefined,
+            giro_billing: giroBilling.trim() || undefined,
+            direccion_billing: direccionBilling.trim() || undefined,
+            comuna_billing: comunaBilling.trim() || undefined,
+            email_billing: emailBilling.trim() || undefined,
           });
         }
 
@@ -1263,6 +1299,19 @@ function DetalleModal({ tx, editMode, setEditMode, auxiliares, isPending, onClos
                 <p className="text-sm font-medium text-gray-900">{tx.receptor_nombre}</p>
                 <p className="text-xs text-gray-500 font-mono">{formatRut(tx.receptor_rut)}</p>
               </div>
+
+              {(tx.estudio_rut || tx.abogado_rut || tx.comprador_rut) && (
+                <div>
+                  <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Facturación</h4>
+                  {tx.estudio_nombre && <Row label="Estudio" value={`${tx.estudio_nombre}${tx.estudio_rut ? ` (${formatRut(tx.estudio_rut)})` : ""}`} />}
+                  {tx.abogado_nombre && <Row label="Abogado" value={`${tx.abogado_nombre}${tx.abogado_rut ? ` (${formatRut(tx.abogado_rut)})` : ""}`} />}
+                  {tx.comprador_nombre && !tx.estudio_nombre && <Row label="Comprador" value={`${tx.comprador_nombre}${tx.comprador_rut ? ` (${formatRut(tx.comprador_rut)})` : ""}`} />}
+                  {tx.giro_billing && <Row label="Giro" value={tx.giro_billing} />}
+                  {tx.direccion_billing && <Row label="Dirección" value={tx.direccion_billing} />}
+                  {tx.comuna_billing && <Row label="Comuna" value={tx.comuna_billing} />}
+                  {tx.email_billing && <Row label="Email" value={tx.email_billing} />}
+                </div>
+              )}
 
               <div>
                 <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Desglose</h4>

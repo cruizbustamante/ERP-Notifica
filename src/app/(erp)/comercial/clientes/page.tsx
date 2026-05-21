@@ -9,7 +9,7 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
   const anio = params.anio ? Number(params.anio) : currentYear;
 
   const [{ data: auxiliares }, { data: fichas }, { data: ventas }, { data: movsCxC }, { data: periodos }] = await Promise.all([
-    supabase.from("auxiliares").select("*").eq("estado", "S").eq("tipo", "CLIENTE").order("razon_social"),
+    supabase.from("auxiliares").select("*").eq("estado", "S").order("razon_social"),
     supabase.from("ficha_comercial").select("*"),
     supabase.from("ventas_sii").select("rut_receptor, monto_total, folio, fecha_emision, tipo_dte").eq("anio", anio),
     supabase
@@ -21,7 +21,6 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     supabase.from("periodos").select("anio, estado").order("anio", { ascending: false }),
   ]);
 
-  // Ventas por cliente
   const ventasMap = new Map<string, { total: number; cant: number; ultima: string | null }>();
   for (const v of ventas || []) {
     const rut = normalizeRut(v.rut_receptor);
@@ -35,7 +34,6 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     ventasMap.set(rut, existing);
   }
 
-  // Saldo CxC
   const saldoCxC = new Map<string, number>();
   for (const m of movsCxC || []) {
     const rut = normalizeRut(m.auxiliar_rut || "");
@@ -44,17 +42,20 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     saldoCxC.set(rut, (saldoCxC.get(rut) || 0) + monto);
   }
 
-  const clientes = (auxiliares || []).map((a) => {
+  const todosAuxiliares = (auxiliares || []).map((a) => {
     const rutNorm = normalizeRut(a.rut);
     const vta = ventasMap.get(rutNorm) || { total: 0, cant: 0, ultima: null };
     const saldo = saldoCxC.get(rutNorm) || 0;
     return {
       rut: rutNorm,
       razon_social: a.razon_social,
+      tipo: a.tipo || "OTRO",
       giro: a.giro || "",
       email: a.email || "",
       telefono: a.telefono || "",
+      direccion: a.direccion || "",
       comuna: a.comuna || "",
+      estudio_rut: a.estudio_rut || "",
       totalVentas: vta.total,
       cantDocs: vta.cant,
       ultimaVenta: vta.ultima,
@@ -78,36 +79,28 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     notas: f.notas || "",
   }));
 
-  // Estadísticas para dashboard
+  const tipoCounts: Record<string, number> = {};
+  for (const a of todosAuxiliares) {
+    tipoCounts[a.tipo] = (tipoCounts[a.tipo] || 0) + 1;
+  }
+
   const activos = fichasNormalized.filter((f) => f.estado === "ACTIVO").length;
   const inactivos = fichasNormalized.filter((f) => f.estado === "INACTIVO").length;
   const totalFichas = fichasNormalized.length;
   const retencion = totalFichas > 0 ? Math.round((activos / totalFichas) * 100) : 0;
-
-  // Tipo documento distribución
   const factura = fichasNormalized.filter((f) => f.tipo_doc === "Factura").length;
   const boleta = fichasNormalized.filter((f) => f.tipo_doc === "Boleta").length;
   const otroDoc = totalFichas - factura - boleta;
-
-  // Tarifa promedio
   const conTarifa = fichasNormalized.filter((f) => f.valor_plan > 0);
-  const tarifaPromedio = conTarifa.length > 0
-    ? conTarifa.reduce((s, f) => s + f.valor_plan, 0) / conTarifa.length
-    : 0;
+  const tarifaPromedio = conTarifa.length > 0 ? conTarifa.reduce((s, f) => s + f.valor_plan, 0) / conTarifa.length : 0;
 
-  // Evolución mensual (nuevos clientes por mes basado en fecha_inicio)
   const evolucion: { mes: string; nuevos: number; acumulado: number }[] = [];
-  const fechas = fichasNormalized
-    .filter((f) => f.fecha_inicio)
-    .map((f) => f.fecha_inicio)
-    .sort();
-
+  const fechas = fichasNormalized.filter((f) => f.fecha_inicio).map((f) => f.fecha_inicio).sort();
   if (fechas.length > 0) {
     const primera = new Date(fechas[0] + "T12:00:00");
     const ahora = new Date();
     let cursor = new Date(primera.getFullYear(), primera.getMonth(), 1);
     let acum = 0;
-
     while (cursor <= ahora) {
       const y = cursor.getFullYear();
       const m = cursor.getMonth();
@@ -124,7 +117,6 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     }
   }
 
-  // Nuevos este mes
   const hoy = new Date();
   const nuevosEsteMes = fichasNormalized.filter((f) => {
     if (!f.fecha_inicio) return false;
@@ -132,17 +124,12 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     return d.getFullYear() === hoy.getFullYear() && d.getMonth() === hoy.getMonth();
   }).length;
 
-  // MRR
-  const mrr = fichasNormalized
-    .filter((f) => f.estado === "ACTIVO" && f.valor_plan > 0)
-    .reduce((s, f) => s + f.valor_plan, 0);
+  const mrr = fichasNormalized.filter((f) => f.estado === "ACTIVO" && f.valor_plan > 0).reduce((s, f) => s + f.valor_plan, 0);
+  const clientesSusc = todosAuxiliares.filter((a) => fichasNormalized.some((f) => f.rut === a.rut));
+  const totalCxC = clientesSusc.reduce((s, c) => s + c.saldoPendiente, 0);
+  const clientesConDeuda = clientesSusc.filter((c) => c.saldoPendiente > 0).length;
+  const totalVentasGlobal = clientesSusc.reduce((s, c) => s + c.totalVentas, 0);
 
-  // CxC total
-  const totalCxC = clientes.reduce((s, c) => s + c.saldoPendiente, 0);
-  const clientesConDeuda = clientes.filter((c) => c.saldoPendiente > 0).length;
-  const totalVentasGlobal = clientes.reduce((s, c) => s + c.totalVentas, 0);
-
-  // Plan distribución
   const planes = new Map<string, number>();
   for (const f of fichasNormalized) {
     const p = f.plan || "Sin plan";
@@ -153,9 +140,9 @@ export default async function ClientesPage({ searchParams }: { searchParams: Pro
     <ClientesClient
       anio={anio}
       periodos={periodos || []}
-      clientes={clientes}
+      auxiliares={todosAuxiliares}
       fichas={fichasNormalized}
-      totalClientes={clientes.length}
+      tipoCounts={tipoCounts}
       totalVentasGlobal={totalVentasGlobal}
       clientesConDeuda={clientesConDeuda}
       dashboard={{

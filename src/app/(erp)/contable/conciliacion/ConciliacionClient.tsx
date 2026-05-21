@@ -26,6 +26,7 @@ import {
   type MarketplaceBulkItem,
   type BancoInfo,
   getSaldosBancos,
+  getDocsCxpReceptor,
 } from "./actions";
 
 type Periodo = { anio: number; estado: string };
@@ -91,6 +92,10 @@ export default function ConciliacionClient({
   const [mktLoading, setMktLoading] = useState(false);
   const [mktBulkPreview, setMktBulkPreview] = useState<MarketplaceBulkItem[] | null>(null);
   const [mktBulkLoading, setMktBulkLoading] = useState(false);
+  const [mktFlujo, setMktFlujo] = useState("1.12");
+  const [receptorDocs, setReceptorDocs] = useState<DocPend[]>([]);
+  const [receptorDocSel, setReceptorDocSel] = useState<DocPend | null>(null);
+  const [receptorCuenta, setReceptorCuenta] = useState("");
 
   const bancoInfo = bancos.find((b) => b.id === bancoActivo) || bancos[0];
   const stats = saldos[bancoActivo] || { saldo: 0, totalMovs: 0, pendientes: 0, contabilizados: 0, totalAbonos: 0, totalCargos: 0 };
@@ -194,7 +199,20 @@ export default function ConciliacionClient({
     setFormAuxiliar(mov.rut_extraido || "");
     setBusqAux(mov.rut_extraido || "");
     setDocsPend([]);
+    setReceptorDocs([]);
+    setReceptorDocSel(null);
+    setReceptorCuenta("");
     setVista("contabilizar");
+
+    if (!esAbono && mov.rut_extraido) {
+      startTransition(async () => {
+        const { docs, cuenta } = await getDocsCxpReceptor(mov.rut_extraido);
+        if (docs.length > 0) {
+          setReceptorDocs(docs);
+          setReceptorCuenta(cuenta);
+        }
+      });
+    }
   };
 
   const buscarDocs = () => {
@@ -880,6 +898,8 @@ export default function ConciliacionClient({
                             <th className="pb-1 font-medium">Auxiliar</th>
                             <th className="pb-1 font-medium">T.Doc</th>
                             <th className="pb-1 font-medium">N.Doc</th>
+                            <th className="pb-1 font-medium">T.Ref</th>
+                            <th className="pb-1 font-medium">N.Ref</th>
                             <th className="pb-1 font-medium text-right">Debe</th>
                             <th className="pb-1 font-medium text-right">Haber</th>
                           </tr>
@@ -890,7 +910,9 @@ export default function ConciliacionClient({
                               <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span> <span className="text-gray-400">{l.cuenta_nombre}</span></td>
                               <td className="py-1 font-mono text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : ""}</td>
                               <td className="py-1 font-mono text-indigo-600">{l.tipo_doc}</td>
-                              <td className="py-1 font-mono text-gray-500 max-w-[80px] truncate" title={l.num_doc}>{l.num_doc}</td>
+                              <td className="py-1 font-mono text-gray-500">{l.num_doc}</td>
+                              <td className="py-1 font-mono text-gray-400">{l.tipo_doc_ref}</td>
+                              <td className="py-1 font-mono text-gray-400">{l.num_doc_ref}</td>
                               <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
                               <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
                             </tr>
@@ -902,13 +924,29 @@ export default function ConciliacionClient({
                 ))}
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex items-center justify-between gap-2 pt-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-500 font-medium">Flujo:</span>
+                  <select value={mktFlujo} onChange={(e) => setMktFlujo(e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-xs font-medium text-gray-700 bg-white">
+                    {(["OPERACIONAL", "INVERSION", "FINANCIAMIENTO"] as const).map((flujo) => {
+                      const cats = categoriasFlujo.filter((c) => c.flujo === flujo);
+                      if (cats.length === 0) return null;
+                      const labels = { OPERACIONAL: "Operacional", INVERSION: "Inversión", FINANCIAMIENTO: "Financiamiento" };
+                      return (
+                        <optgroup key={flujo} label={labels[flujo]}>
+                          {cats.map((c) => <option key={c.id} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div className="flex gap-2">
                 <button onClick={() => setMktBulkPreview(null)} className="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 hover:bg-gray-50">Cancelar</button>
                 <button
                   onClick={() => {
                     startTransition(async () => {
                       const items = mktBulkPreview!.map((i) => ({ cartola_id: i.cartola_id, fecha_abono: i.preview.fecha_abono }));
-                      const res = await confirmarMatchMarketplaceBulk(items, "1.01");
+                      const res = await confirmarMatchMarketplaceBulk(items, mktFlujo);
                       setMktBulkPreview(null);
                       if (res.total > 0) {
                         setMensaje({ tipo: "ok", texto: `${res.total} depósito${res.total > 1 ? "s" : ""} TBK contabilizado${res.total > 1 ? "s" : ""} con marketplace` });
@@ -923,6 +961,7 @@ export default function ConciliacionClient({
                 >
                   {isPending ? "Contabilizando..." : `Confirmar ${mktBulkPreview.length} asiento${mktBulkPreview.length > 1 ? "s" : ""}`}
                 </button>
+                </div>
               </div>
             </div>
           )}
@@ -1176,6 +1215,101 @@ export default function ConciliacionClient({
             </div>
           </div>
 
+          {/* Pago a receptor marketplace */}
+          {movActivo.cargo_abono !== "A" && movActivo.rut_extraido && receptorDocs.length > 0 && (
+            <div className="border border-blue-200 bg-blue-50/50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">RECEPTOR</span>
+                <span className="text-sm font-medium text-gray-700">
+                  Pago a receptor — <span className="font-mono text-indigo-600">{formatRut(movActivo.rut_extraido)}</span>
+                  {(() => { const aux = auxiliares.find((a) => a.rut === movActivo.rut_extraido); return aux ? ` — ${aux.razon_social}` : ""; })()}
+                </span>
+              </div>
+
+              <p className="text-xs text-gray-500">Seleccione el documento CXP a pagar:</p>
+
+              <div className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                {receptorDocs.map((d) => (
+                  <button
+                    key={`${d.tipo_doc}-${d.num_doc}`}
+                    onClick={() => {
+                      setReceptorDocSel(d);
+                      setFormCuenta(receptorCuenta);
+                      setFormAuxiliar(movActivo.rut_extraido);
+                      setBusqAux(movActivo.rut_extraido);
+                      setFormTipoDoc("TR");
+                      if (movActivo.fecha) {
+                        const [y, m] = movActivo.fecha.split("-").map(Number);
+                        setFormNumDoc(`${m}${y}`);
+                      }
+                      setFormTipoDocRef(d.tipo_doc);
+                      setFormNumDocRef(d.num_doc);
+                      setFormCategoria("1.04");
+                      setFormGlosa(`Pago receptor ${d.tipo_doc} ${d.num_doc}`);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 hover:bg-blue-50 transition-colors text-sm border-b last:border-0 ${
+                      receptorDocSel?.tipo_doc === d.tipo_doc && receptorDocSel?.num_doc === d.num_doc ? "bg-blue-100 border-blue-200" : ""
+                    }`}
+                  >
+                    <span>
+                      <span className="font-medium text-indigo-600">{d.tipo_doc}</span>{" "}
+                      <span className="font-mono text-gray-600">{d.num_doc}</span>
+                    </span>
+                    <span className="font-mono font-semibold text-gray-900">${formatMonto(d.saldo)}</span>
+                  </button>
+                ))}
+              </div>
+
+              {receptorDocSel && (
+                <div className="bg-white rounded-lg border border-blue-200 p-3 space-y-3">
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Asiento propuesto</p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-gray-400 border-b">
+                        <th className="pb-1 font-medium">Cuenta</th>
+                        <th className="pb-1 font-medium">Auxiliar</th>
+                        <th className="pb-1 font-medium">T.Doc</th>
+                        <th className="pb-1 font-medium">N.Doc</th>
+                        <th className="pb-1 font-medium">T.Ref</th>
+                        <th className="pb-1 font-medium">N.Ref</th>
+                        <th className="pb-1 font-medium text-right">Debe</th>
+                        <th className="pb-1 font-medium text-right">Haber</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="py-1 font-mono">{bancoInfo.cuentaContable}</td>
+                        <td className="py-1"></td>
+                        <td className="py-1"></td>
+                        <td className="py-1"></td>
+                        <td className="py-1"></td>
+                        <td className="py-1"></td>
+                        <td className="py-1 text-right font-mono"></td>
+                        <td className="py-1 text-right font-mono">{formatMonto(Math.abs(movActivo.monto))}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1 font-mono">{receptorCuenta}</td>
+                        <td className="py-1 font-mono text-gray-500">{formatRut(movActivo.rut_extraido)}</td>
+                        <td className="py-1 font-mono text-indigo-600">TR</td>
+                        <td className="py-1 font-mono text-gray-500">{movActivo.fecha ? `${Number(movActivo.fecha.split("-")[1])}${movActivo.fecha.split("-")[0]}` : ""}</td>
+                        <td className="py-1 font-mono text-gray-400">{receptorDocSel.tipo_doc}</td>
+                        <td className="py-1 font-mono text-gray-400">{receptorDocSel.num_doc}</td>
+                        <td className="py-1 text-right font-mono">{formatMonto(Math.abs(movActivo.monto))}</td>
+                        <td className="py-1 text-right font-mono"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div className="flex justify-end">
+                    <button onClick={ejecutarContab} disabled={isPending}
+                      className="bg-emerald-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                      {isPending ? "Procesando..." : "Confirmar pago receptor"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Match Marketplace TBK */}
           {movActivo.cargo_abono === "A" && /transbank|webpay|tbk/i.test(movActivo.descripcion) && (
             <div className="border border-orange-200 bg-orange-50/50 rounded-xl p-4 space-y-3">
@@ -1232,15 +1366,32 @@ export default function ConciliacionClient({
                     </div>
                   )}
 
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-gray-500 font-medium">Flujo de efectivo:</span>
+                    <select value={mktFlujo} onChange={(e) => setMktFlujo(e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-xs font-medium text-gray-700 bg-white">
+                      {(["OPERACIONAL", "INVERSION", "FINANCIAMIENTO"] as const).map((flujo) => {
+                        const cats = categoriasFlujo.filter((c) => c.flujo === flujo);
+                        if (cats.length === 0) return null;
+                        const labels = { OPERACIONAL: "Operacional", INVERSION: "Inversión", FINANCIAMIENTO: "Financiamiento" };
+                        return (
+                          <optgroup key={flujo} label={labels[flujo]}>
+                            {cats.map((c) => <option key={c.id} value={c.codigo}>{c.codigo} — {c.nombre}</option>)}
+                          </optgroup>
+                        );
+                      })}
+                    </select>
+                  </div>
+
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-left text-gray-400 border-b">
                           <th className="pb-1 font-medium">Cuenta</th>
-                          <th className="pb-1 font-medium">Glosa</th>
                           <th className="pb-1 font-medium">Auxiliar</th>
                           <th className="pb-1 font-medium">T.Doc</th>
                           <th className="pb-1 font-medium">N.Doc</th>
+                          <th className="pb-1 font-medium">T.Ref</th>
+                          <th className="pb-1 font-medium">N.Ref</th>
                           <th className="pb-1 font-medium text-right">Debe</th>
                           <th className="pb-1 font-medium text-right">Haber</th>
                         </tr>
@@ -1248,17 +1399,18 @@ export default function ConciliacionClient({
                       <tbody>
                         {mktPreview.lineas.map((l, i) => (
                           <tr key={i} className="border-b last:border-0">
-                            <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-400 ml-1">— {l.cuenta_nombre}</span>}</td>
-                            <td className="py-1 truncate max-w-[150px]">{l.glosa}</td>
+                            <td className="py-1"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-400 ml-1">{l.cuenta_nombre}</span>}</td>
                             <td className="py-1 font-mono text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : ""}</td>
                             <td className="py-1 font-mono text-indigo-600">{l.tipo_doc}</td>
-                            <td className="py-1 font-mono text-gray-500 max-w-[100px] truncate" title={l.num_doc}>{l.num_doc}</td>
+                            <td className="py-1 font-mono text-gray-500">{l.num_doc}</td>
+                            <td className="py-1 font-mono text-gray-400">{l.tipo_doc_ref}</td>
+                            <td className="py-1 font-mono text-gray-400">{l.num_doc_ref}</td>
                             <td className="py-1 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
                             <td className="py-1 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
                           </tr>
                         ))}
                         <tr className="border-t-2 font-bold">
-                          <td colSpan={5} className="py-1">Total</td>
+                          <td colSpan={6} className="py-1">Total</td>
                           <td className="py-1 text-right font-mono">{formatMonto(mktPreview.lineas.reduce((s, l) => s + l.debe, 0))}</td>
                           <td className="py-1 text-right font-mono">{formatMonto(mktPreview.lineas.reduce((s, l) => s + l.haber, 0))}</td>
                         </tr>
@@ -1271,7 +1423,7 @@ export default function ConciliacionClient({
                     <button
                       onClick={() => {
                         startTransition(async () => {
-                          const res = await contabilizarMarketplace(movActivo.id, mktPreview!.fecha_abono, formCategoria || "1.01");
+                          const res = await contabilizarMarketplace(movActivo.id, mktPreview!.fecha_abono, mktFlujo);
                           if (res.error) {
                             setMensaje({ tipo: "error", texto: res.error });
                           } else {

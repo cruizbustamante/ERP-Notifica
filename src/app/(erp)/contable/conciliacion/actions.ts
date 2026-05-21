@@ -799,6 +799,8 @@ export type MarketplaceMatchPreview = {
     auxiliar_rut: string;
     tipo_doc: string;
     num_doc: string;
+    tipo_doc_ref: string;
+    num_doc_ref: string;
   }>;
   error: string | null;
 };
@@ -859,33 +861,68 @@ export async function previewMatchMarketplace(fechaAbono: string, montoCartola?:
     debe: depositoReal, haber: 0,
     glosa: `Depósito TBK ${fechaAbono} (${txs.length} tx)`,
     auxiliar_rut: "", tipo_doc: "", num_doc: "",
+    tipo_doc_ref: "", num_doc_ref: "",
   });
+
+  // Numeración MYYYY (ej: 32026 = marzo 2026)
+  const [abonoY, abonoM] = fechaAbono.split("-").map(Number);
+  const numDocPeriodo = `${abonoM}${abonoY}`;
 
   if (costoTBKReal > 0) {
     lineas.push({
       cuenta_codigo: ctaAntProv, cuenta_nombre: nombres[ctaAntProv] || "",
       debe: costoTBKReal, haber: 0,
       glosa: `Anticipo comisión TBK ${fechaAbono}`,
-      auxiliar_rut: "", tipo_doc: "", num_doc: "",
+      auxiliar_rut: "96689310-9", tipo_doc: "AN", num_doc: numDocPeriodo,
+      tipo_doc_ref: "AN", num_doc_ref: numDocPeriodo,
     });
   }
 
   for (const r of receptores) {
-    const docNum = r.ordenes.join(",");
     lineas.push({
       cuenta_codigo: ctaCxpReceptores, cuenta_nombre: nombres[ctaCxpReceptores] || "",
       debe: 0, haber: r.base,
       glosa: `CxP ${r.nombre}`,
-      auxiliar_rut: r.rut, tipo_doc: "LQ", num_doc: docNum,
+      auxiliar_rut: r.rut, tipo_doc: "LQ", num_doc: numDocPeriodo,
+      tipo_doc_ref: "LQ", num_doc_ref: numDocPeriodo,
     });
   }
 
-  lineas.push({
-    cuenta_codigo: ctaAntClientes, cuenta_nombre: nombres[ctaAntClientes] || "",
-    debe: 0, haber: totalComision,
-    glosa: `Anticipo comisión NL ${fechaAbono}`,
-    auxiliar_rut: "", tipo_doc: "", num_doc: "",
-  });
+  // Anticipo clientes: por comprador (abogado) si hay datos, sino por receptor
+  const { data: txsDetalle } = await supabase
+    .from("marketplace_transacciones")
+    .select("receptor_rut, comision_nl_bruta, comprador_rut, comprador_nombre")
+    .eq("fecha_abono_tbk", fechaAbono)
+    .neq("estado", "ANULADO");
+
+  const porComprador: Record<string, { rut: string; nombre: string; comision: number }> = {};
+  for (const tx of txsDetalle || []) {
+    const cRut = tx.comprador_rut || tx.receptor_rut;
+    const cNombre = tx.comprador_nombre || "";
+    if (!porComprador[cRut]) porComprador[cRut] = { rut: cRut, nombre: cNombre, comision: 0 };
+    porComprador[cRut].comision += Number(tx.comision_nl_bruta) || 0;
+  }
+
+  const compradores = Object.values(porComprador).filter((c) => c.comision > 0);
+  if (compradores.length > 0) {
+    for (const c of compradores) {
+      lineas.push({
+        cuenta_codigo: ctaAntClientes, cuenta_nombre: nombres[ctaAntClientes] || "",
+        debe: 0, haber: c.comision,
+        glosa: `Anticipo comisión NL — ${c.nombre || c.rut}`,
+        auxiliar_rut: c.rut, tipo_doc: "AN", num_doc: numDocPeriodo,
+        tipo_doc_ref: "AN", num_doc_ref: numDocPeriodo,
+      });
+    }
+  } else {
+    lineas.push({
+      cuenta_codigo: ctaAntClientes, cuenta_nombre: nombres[ctaAntClientes] || "",
+      debe: 0, haber: totalComision,
+      glosa: `Anticipo comisión NL ${fechaAbono}`,
+      auxiliar_rut: "", tipo_doc: "AN", num_doc: numDocPeriodo,
+      tipo_doc_ref: "AN", num_doc_ref: numDocPeriodo,
+    });
+  }
 
   return {
     receptores,
@@ -979,7 +1016,8 @@ export async function contabilizarMarketplace(cartolaId: number, fechaAbono: str
   if (!mov) return { error: "Movimiento no encontrado" };
   if (mov.contabilizado) return { error: "Ya está contabilizado" };
 
-  const preview = await previewMatchMarketplace(fechaAbono);
+  const montoCartola = Math.abs(Number(mov.monto) || 0);
+  const preview = await previewMatchMarketplace(fechaAbono, montoCartola);
   if (preview.error) return { error: preview.error };
   if (preview.lineas.length === 0) return { error: "Sin transacciones para contabilizar" };
 
@@ -996,9 +1034,9 @@ export async function contabilizarMarketplace(cartolaId: number, fechaAbono: str
     tipo_doc: l.tipo_doc,
     num_doc: l.num_doc,
     fecha_doc: mov.fecha,
-    tipo_doc_ref: "",
-    num_doc_ref: "",
-    categoria_flujo: i === 0 ? (categoriaFlujo || "1.01") : "",
+    tipo_doc_ref: l.tipo_doc_ref || "",
+    num_doc_ref: l.num_doc_ref || "",
+    categoria_flujo: i === 0 ? (categoriaFlujo || "1.12") : "",
   }));
 
   const result = await crearComprobante({
@@ -1066,4 +1104,11 @@ export async function getDocsPendientesAuxiliar(cuentaCodigo: string, auxiliarRu
         saldo: Math.abs(saldo),
       })),
   };
+}
+
+export async function getDocsCxpReceptor(rut: string) {
+  const config = await getConfig();
+  const ctaCxpReceptores = config.CUENTA_CXP_RECEPTORES || "2-1-05-003";
+  const result = await getDocsPendientesAuxiliar(ctaCxpReceptores, rut);
+  return { ...result, cuenta: ctaCxpReceptores };
 }

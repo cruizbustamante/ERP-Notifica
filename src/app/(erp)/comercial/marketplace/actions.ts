@@ -60,6 +60,16 @@ export type TransaccionRow = {
   referencia_pago: string | null;
   lote_carga: string | null;
   created_at: string;
+  comprador_rut: string | null;
+  comprador_nombre: string | null;
+  abogado_rut: string | null;
+  abogado_nombre: string | null;
+  estudio_rut: string | null;
+  estudio_nombre: string | null;
+  giro_billing: string | null;
+  direccion_billing: string | null;
+  comuna_billing: string | null;
+  email_billing: string | null;
 };
 
 export type TransaccionInput = {
@@ -74,6 +84,16 @@ export type TransaccionInput = {
   id_tbk?: string;
   id_mp?: string;
   card_type?: string;
+  comprador_rut?: string;
+  comprador_nombre?: string;
+  abogado_rut?: string;
+  abogado_nombre?: string;
+  estudio_rut?: string;
+  estudio_nombre?: string;
+  giro_billing?: string;
+  direccion_billing?: string;
+  comuna_billing?: string;
+  email_billing?: string;
 };
 
 function calcularDesglose(monto: number, comisionNL: number) {
@@ -109,9 +129,49 @@ export async function cargarTransacciones(transacciones: TransaccionInput[]) {
       id_tbk: t.id_tbk || null,
       id_mp: t.id_mp || null,
       card_type: t.card_type || null,
+      comprador_rut: t.comprador_rut || "",
+      comprador_nombre: t.comprador_nombre || "",
+      abogado_rut: t.abogado_rut || "",
+      abogado_nombre: t.abogado_nombre || "",
+      estudio_rut: t.estudio_rut || "",
+      estudio_nombre: t.estudio_nombre || "",
+      giro_billing: t.giro_billing || "",
+      direccion_billing: t.direccion_billing || "",
+      comuna_billing: t.comuna_billing || "",
+      email_billing: t.email_billing || "",
       lote_carga: lote,
     };
   });
+
+  // Auto-crear/actualizar auxiliares para estudios y abogados
+  const estudiosMap = new Map<string, TransaccionInput>();
+  const abogadosMap = new Map<string, TransaccionInput>();
+  for (const t of transacciones) {
+    if (t.estudio_rut && t.estudio_nombre) estudiosMap.set(t.estudio_rut, t);
+    if (t.abogado_rut && t.abogado_nombre) abogadosMap.set(t.abogado_rut, t);
+  }
+
+  const auxiliarUpserts: { rut: string; razon_social: string; tipo: string; giro?: string; direccion?: string; comuna?: string; email?: string; estudio_rut?: string }[] = [];
+  for (const [rut, t] of estudiosMap) {
+    auxiliarUpserts.push({
+      rut, razon_social: t.estudio_nombre!.trim(), tipo: "ESTUDIO",
+      giro: t.giro_billing || "", direccion: t.direccion_billing || "",
+      comuna: t.comuna_billing || "", email: t.email_billing || "",
+    });
+  }
+  for (const [rut, t] of abogadosMap) {
+    auxiliarUpserts.push({
+      rut, razon_social: t.abogado_nombre!.trim(), tipo: "ABOGADO",
+      estudio_rut: t.estudio_rut || "",
+    });
+  }
+
+  if (auxiliarUpserts.length > 0) {
+    await supabase.from("auxiliares").upsert(
+      auxiliarUpserts.map((a) => ({ ...a, estado: "S" })),
+      { onConflict: "rut", ignoreDuplicates: false }
+    );
+  }
 
   const { error, data } = await supabase
     .from("marketplace_transacciones")
