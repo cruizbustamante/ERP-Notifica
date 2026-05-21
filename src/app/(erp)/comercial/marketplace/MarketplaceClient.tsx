@@ -12,7 +12,11 @@ import {
   anularTransaccion,
   editarTransaccion,
   marcarBoletaEmitida,
+  getComparativoNegocios,
+  getRentabilidadPorPlataforma,
   type TransaccionInput,
+  type ComparativoNegocio,
+  type RentabilidadPlataforma,
 } from "./actions";
 
 type Transaccion = {
@@ -72,7 +76,7 @@ function fmt(n: number) {
   return new Intl.NumberFormat("es-CL").format(Math.round(n));
 }
 
-const TABS = ["Transacciones", "Receptores", "Boletas", "Carga"] as const;
+const TABS = ["Dashboard", "Transacciones", "Receptores", "Boletas", "Negocio", "Carga"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function MarketplaceClient({
@@ -104,12 +108,23 @@ export default function MarketplaceClient({
   const [showPagoModal, setShowPagoModal] = useState(false);
   const [detalleTx, setDetalleTx] = useState<Transaccion | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [comparativo, setComparativo] = useState<ComparativoNegocio[] | null>(null);
+  const [rentabilidad, setRentabilidad] = useState<RentabilidadPlataforma[] | null>(null);
 
   useEffect(() => {
     setTransacciones(transaccionesIniciales);
     setSeleccionados(new Set());
     setReceptorBloqueado(null);
+    setComparativo(null);
+    setRentabilidad(null);
   }, [anio, transaccionesIniciales]);
+
+  async function loadNegocioData() {
+    if (comparativo) return;
+    const [comp, rent] = await Promise.all([getComparativoNegocios(anio), getRentabilidadPorPlataforma()]);
+    if (!comp.error) setComparativo(comp.data);
+    if (!rent.error) setRentabilidad(rent.data);
+  }
 
   const pendientes = transacciones.filter((t) => t.estado === "PENDIENTE");
   const pagados = transacciones.filter((t) => t.estado === "PAGADO");
@@ -222,7 +237,7 @@ export default function MarketplaceClient({
       {/* ═══ TABS ═══ */}
       <div className="flex gap-1 bg-white rounded-xl p-1.5 shadow-sm border border-gray-200 w-fit overflow-x-auto">
         {TABS.map((t) => (
-          <button key={t} onClick={() => { setVista(t); if (t !== "Transacciones") limpiarSeleccion(); }}
+          <button key={t} onClick={() => { setVista(t); if (t !== "Transacciones") limpiarSeleccion(); if (t === "Negocio" || t === "Dashboard") loadNegocioData(); }}
             className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
               vista === t ? "text-white font-semibold shadow-sm" : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"
             }`}
@@ -647,6 +662,21 @@ export default function MarketplaceClient({
           }}
           isPending={isPending}
         />
+      )}
+
+      {/* ═══ TAB: DASHBOARD ═══ */}
+      {vista === "Dashboard" && (
+        <DashboardTab kpis={kpis} anio={anio} resumenReceptores={resumenReceptores}
+          totalPendiente={totalPendiente} pendientesCount={pendientes.length}
+          receptoresTotal={receptores.length} rentabilidad={rentabilidad}
+          porMes={kpis.porMes} transacciones={transacciones} />
+      )}
+
+      {/* ═══ TAB: NEGOCIO ═══ */}
+      {vista === "Negocio" && (
+        <NegocioTab kpis={kpis} anio={anio} comparativo={comparativo}
+          rentabilidad={rentabilidad} resumenReceptores={resumenReceptores}
+          receptoresTotal={receptores.length} transacciones={transacciones} />
       )}
 
       {/* ═══ TAB: CARGA ═══ */}
@@ -1638,6 +1668,651 @@ function CargaTBKPanel({ onSuccess, onError }: { onSuccess: (m: string) => void;
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Dashboard Tab ─────────────────────────────────────────────────────────
+
+function DashboardTab({ kpis, anio, resumenReceptores, totalPendiente, pendientesCount, receptoresTotal, rentabilidad, porMes, transacciones }: {
+  kpis: KPIs;
+  anio: number;
+  resumenReceptores: { rut: string; nombre: string; pendiente: number; pagado: number; transacciones: number; bruto: number; comisionNeta: number; costoPlat: number; margen: number; ultimaFecha: string | null }[];
+  totalPendiente: number;
+  pendientesCount: number;
+  receptoresTotal: number;
+  rentabilidad: RentabilidadPlataforma[] | null;
+  porMes: { mes: number; ventas: number; margen: number; tx: number }[];
+  transacciones: Transaccion[];
+}) {
+  const mesesConData = porMes.filter((m) => m.tx > 0).length || 1;
+  const velocity = kpis.totalTx / mesesConData;
+  const takeRate = kpis.totalVentas > 0 ? (kpis.totalMargen / kpis.totalVentas) * 100 : 0;
+  const topPct = resumenReceptores.length > 0 && kpis.totalVentas > 0 ? Math.round((resumenReceptores[0].bruto / kpis.totalVentas) * 100) : 0;
+  const mktActivos = resumenReceptores.length;
+  const dormidos = receptoresTotal - mktActivos;
+  const dormidosPct = receptoresTotal > 0 ? Math.round((dormidos / receptoresTotal) * 100) : 0;
+  const maxMes = porMes.length > 0 ? Math.max(...porMes.map((m) => m.ventas)) : 1;
+  const maxMargenMes = porMes.length > 0 ? Math.max(...porMes.map((m) => m.margen)) : 1;
+
+  const bestMes = porMes.length > 0 ? [...porMes].sort((a, b) => b.ventas - a.ventas)[0] : null;
+  const margenPorTx = kpis.totalTx > 0 ? Math.round(kpis.totalMargen / kpis.totalTx) : 0;
+
+  const estudiosActivos = new Set(transacciones.filter((t) => t.estado !== "ANULADO" && t.estudio_rut).map((t) => t.estudio_rut)).size;
+
+  return (
+    <div className="space-y-5 animate-fadeIn">
+      {/* Executive Banner */}
+      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #e0e7ff" }}>
+        <div className="px-5 sm:px-6 py-5 sm:py-6" style={{ background: "linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)" }}>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-400 mb-1.5">
+                Pulso · {new Date().toLocaleDateString("es-CL", { day: "numeric", month: "long", year: "numeric" })}
+              </p>
+              <p className="text-[17px] font-bold text-gray-900 leading-snug mb-2">
+                {bestMes ? `${MESES[bestMes.mes]} fue el mejor mes con $${fmt(bestMes.ventas)} GMV` : `Marketplace ${anio} · Vista ejecutiva`}
+              </p>
+              <p className="text-[13px] text-gray-600 leading-relaxed max-w-3xl">
+                Marketplace lleva <b>${fmt(kpis.totalVentas)} GMV</b> en <b>{kpis.totalTx} tx</b> durante {anio}.
+                {bestMes && <> Mejor mes: <b>{MESES[bestMes.mes]}</b> (${fmt(bestMes.ventas)}, {bestMes.tx} tx).</>}
+                {" "}Ticket promedio <b>${fmt(kpis.ticketPromedio)}</b> · Margen neto <b>${fmt(kpis.totalMargen)}</b>.
+                {topPct > 35 && <> Atención: <b>concentración crítica</b> en {resumenReceptores[0].nombre.split(" ").slice(0, 2).join(" ")} ({topPct}% del GMV YTD).</>}
+              </p>
+            </div>
+            <div className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase"
+              style={{ background: kpis.totalTx > 0 ? "#ecfdf5" : "#fef3c7", color: kpis.totalTx > 0 ? "#047857" : "#92400e" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              {kpis.totalTx > 0 ? "Activo" : "Sin datos"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hero KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <HeroKpi label="GMV YTD" value={`$${fmt(kpis.totalVentas)}`} sub={`${kpis.totalTx} transacciones · ${anio}`} />
+        <HeroKpi label="Take Rate Efectivo" value={`${takeRate.toFixed(2)}%`} sub="Margen / GMV" />
+        <HeroKpi label="Velocity" value={`${velocity.toFixed(1)} tx/mes`} sub={`Run-rate · ${kpis.totalTx} tx en ${mesesConData} meses`} />
+        <HeroKpi label="Margen Neto" value={`$${fmt(kpis.totalMargen)}`} sub={`$${fmt(margenPorTx)} por transacción`} />
+      </div>
+
+      {/* CFO Alerts */}
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Atención requerida</p>
+        <p className="text-sm font-bold text-gray-900 mb-3">Alertas CFO · Decisiones del día</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <AlertCard severity={topPct > 35 ? "critical" : "ok"} title="Concentración" detail={resumenReceptores[0] ? `${resumenReceptores[0].nombre.split(" ").slice(0, 2).join(" ")} concentra el GMV YTD` : "Sin datos"} metric={`${topPct}%`} />
+          <AlertCard severity={totalPendiente > 0 ? "warning" : "ok"} title="Cash a transferir" detail={`${pendientesCount} tx pendientes a ${resumenReceptores.filter((r) => r.pendiente > 0).length} receptores`} metric={`$${fmt(totalPendiente)}`} />
+          <AlertCard severity={kpis.boletasPend > 0 ? "warning" : "ok"} title="Boletas sin emitir" detail={`${kpis.boletasPend} transacciones sin boleta = riesgo SII`} metric={`$${fmt(kpis.totalComBruta)}`} />
+          <AlertCard severity={dormidosPct > 50 ? "info" : "ok"} title="Activación dormida" detail={`${dormidos} receptores registrados NO usan marketplace`} metric={`${dormidosPct}%`} />
+        </div>
+      </div>
+
+      {/* Waterfall */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Anatomía del GMV YTD</p>
+        <p className="text-sm font-bold text-gray-900 mb-1">¿Dónde va cada peso que entra?</p>
+        <p className="text-xs text-gray-500 mb-5">Descomposición real · acumulado {anio}</p>
+        <div className="space-y-3">
+          <WaterfallBar label="GMV Bruto" sub="Lo que paga el abogado/estudio" amount={kpis.totalVentas} total={kpis.totalVentas} type="positive" />
+          <WaterfallBar label="− Base receptores" sub={`85% pass-through · ${kpis.totalTx} tx`} amount={kpis.totalBase} total={kpis.totalVentas} type="deduction" />
+          <WaterfallBar label="− IVA comisión" sub="19% sobre honorarios NL" amount={kpis.totalIva} total={kpis.totalVentas} type="deduction" />
+          <WaterfallBar label="− Costo plataforma" sub="TBK + MP fees con IVA" amount={kpis.totalCosto} total={kpis.totalVentas} type="cost" />
+          <div className="border-t-2 border-gray-200 my-1" />
+          <WaterfallBar label="= Margen Operacional Neto" sub="Lo que se queda NL para opex" amount={kpis.totalMargen} total={kpis.totalVentas} type="final" />
+        </div>
+      </div>
+
+      {/* Trajectory */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Trayectoria YTD</p>
+            <p className="text-sm font-bold text-gray-900">GMV y margen mes a mes</p>
+          </div>
+          <div className="flex gap-5 text-right">
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-400">Run-rate anual</p>
+              <p className="text-sm font-bold tabular-nums" style={{ color: "#1e1b8a" }}>${fmt(kpis.totalVentas / mesesConData * 12)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-400">Margen anualizado</p>
+              <p className="text-sm font-bold tabular-nums text-emerald-600">${fmt(kpis.totalMargen / mesesConData * 12)}</p>
+            </div>
+          </div>
+        </div>
+        {porMes.some((m) => m.tx > 0) ? (
+          <>
+            <div className="flex items-end gap-2 h-40">
+              {Array.from({ length: 12 }, (_, i) => {
+                const m = porMes.find((p) => p.mes === i + 1);
+                const v = m?.ventas || 0;
+                const mg = m?.margen || 0;
+                const isCurrent = new Date().getMonth() === i && new Date().getFullYear() === anio;
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end h-full gap-0.5" title={`${MESES[i + 1]}: $${fmt(v)} GMV · $${fmt(mg)} margen · ${m?.tx || 0} tx`}>
+                    <div className="w-full rounded-t" style={{ height: `${Math.max((v / maxMes) * 100, v > 0 ? 6 : 2)}%`, background: isCurrent ? "linear-gradient(180deg, #4338ca, #6366f1)" : "#c7d2fe" }} />
+                    <div className="w-full rounded-t" style={{ height: `${Math.max((mg / maxMargenMes) * 40, mg > 0 ? 3 : 0)}%`, background: isCurrent ? "#059669" : "#a7f3d0" }} />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between mt-2">
+              {["E", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"].map((l, i) => (
+                <span key={i} className="text-[10px] text-gray-400 font-medium flex-1 text-center">{l}</span>
+              ))}
+            </div>
+            <div className="flex items-center gap-5 mt-3 text-[11px] text-gray-500">
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#4338ca" }} />GMV mensual</span>
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />Margen neto</span>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400 text-center py-8">Sin datos para {anio}</p>
+        )}
+      </div>
+
+      {/* Platform Comparison */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Eficiencia por canal</p>
+          <p className="text-sm font-bold text-gray-900 mb-4">TBK vs Mercado Pago</p>
+          {rentabilidad ? rentabilidad.map((r) => {
+            const totalTx = rentabilidad.reduce((s, p) => s + p.transacciones, 0);
+            const pctTx = totalTx > 0 ? Math.round((r.transacciones / totalTx) * 100) : 0;
+            const platTakeRate = r.monto_bruto > 0 ? ((r.rentabilidad_neta / r.monto_bruto) * 100).toFixed(2) : "0";
+            return (
+              <div key={r.plataforma} className="mb-4 last:mb-0">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${r.plataforma === "TBK" ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"}`}>
+                    {r.plataforma === "TBK" ? "Transbank" : "Mercado Pago"}
+                  </span>
+                  <span className="text-[11px] text-gray-500">{r.transacciones} tx · {pctTx}%</span>
+                </div>
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  <div>
+                    <p className="text-[10px] text-gray-500 uppercase font-medium">GMV</p>
+                    <p className="text-sm font-bold tabular-nums">${fmt(r.monto_bruto / 1000)}k</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500 uppercase font-medium">Costo</p>
+                    <p className="text-sm font-bold tabular-nums text-red-600">${fmt(r.costo_plataforma / 1000)}k</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500 uppercase font-medium">Margen</p>
+                    <p className="text-sm font-bold tabular-nums text-emerald-600">${fmt(r.rentabilidad_neta / 1000)}k</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500 uppercase font-medium">Take rate</p>
+                    <p className="text-sm font-bold tabular-nums" style={{ color: "#1e1b8a" }}>{platTakeRate}%</p>
+                  </div>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="flex items-center justify-center py-8">
+              <span className="text-sm text-gray-400">Cargando datos...</span>
+            </div>
+          )}
+          {rentabilidad && rentabilidad.length === 2 && (() => {
+            const [a, b] = rentabilidad[0].monto_bruto > rentabilidad[1].monto_bruto ? [rentabilidad[0], rentabilidad[1]] : [rentabilidad[1], rentabilidad[0]];
+            const costDiffBps = b.monto_bruto > 0 && a.monto_bruto > 0
+              ? Math.round(((b.costo_plataforma / b.monto_bruto) - (a.costo_plataforma / a.monto_bruto)) * 10000)
+              : 0;
+            if (costDiffBps > 50) {
+              return (
+                <div className="mt-4 p-3 rounded-lg text-xs text-gray-600 leading-relaxed" style={{ background: "#fffbeb", borderLeft: "3px solid #f59e0b" }}>
+                  <b className="text-gray-900">Insight:</b> {b.plataforma === "MP" ? "Mercado Pago" : "Transbank"} cobra <b className="text-red-600">{costDiffBps} bps más</b> que {a.plataforma === "TBK" ? "Transbank" : "Mercado Pago"}.
+                </div>
+              );
+            }
+            return null;
+          })()}
+        </div>
+
+        {/* Concentration */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Análisis de riesgo</p>
+          <p className="text-sm font-bold text-gray-900 mb-1">Concentración de GMV por receptor</p>
+          <p className="text-xs text-gray-500 mb-4">Top {Math.min(8, resumenReceptores.length)} receptores</p>
+          <div className="space-y-2">
+            {resumenReceptores.slice(0, 8).map((r) => {
+              const pct = kpis.totalVentas > 0 ? (r.bruto / kpis.totalVentas) * 100 : 0;
+              return (
+                <div key={r.rut} className="grid items-center gap-3" style={{ gridTemplateColumns: "110px 1fr 50px" }}>
+                  <span className="text-[11px] font-semibold text-gray-800 truncate">{r.nombre.split(" ").slice(0, 2).join(" ")}</span>
+                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
+                    <div className="h-full rounded-full transition-all" style={{
+                      width: `${pct}%`,
+                      background: pct > 30 ? "linear-gradient(90deg, #ef4444, #f87171)" : pct > 15 ? "linear-gradient(90deg, #f59e0b, #fbbf24)" : "linear-gradient(90deg, #4338ca, #6366f1)",
+                    }} />
+                  </div>
+                  <span className="text-xs font-bold tabular-nums text-right">{pct.toFixed(1)}%</span>
+                </div>
+              );
+            })}
+          </div>
+          {resumenReceptores.length === 0 && <p className="text-sm text-gray-400 text-center py-6">Sin datos</p>}
+        </div>
+      </div>
+
+      {/* Unit Economics */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Unit economics</p>
+        <p className="text-sm font-bold text-gray-900 mb-4">Rentabilidad por receptor</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px]">
+            <thead>
+              <tr className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold border-b bg-gray-50/50">
+                <th className="px-3 py-2.5 text-left">Receptor</th>
+                <th className="px-3 py-2.5 text-right">Tx</th>
+                <th className="px-3 py-2.5 text-right">Ticket</th>
+                <th className="px-3 py-2.5 text-right">Margen/tx</th>
+                <th className="px-3 py-2.5 text-right">Margen total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resumenReceptores.slice(0, 10).map((r) => (
+                <tr key={r.rut} className="border-b border-gray-100 hover:bg-gray-50/50">
+                  <td className="px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-900">{r.nombre}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">{r.transacciones}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">${fmt(r.transacciones > 0 ? r.bruto / r.transacciones : 0)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-emerald-600">${fmt(r.transacciones > 0 ? r.margen / r.transacciones : 0)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs font-semibold tabular-nums">${fmt(r.margen)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HeroKpi({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5 shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
+      <div className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: "linear-gradient(180deg, #4338ca, #6366f1)" }} />
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-2">{label}</p>
+      <p className="text-xl sm:text-2xl font-bold tracking-tight tabular-nums mb-1" style={{ color: "#1e1b4b" }}>{value}</p>
+      <p className="text-xs text-gray-500">{sub}</p>
+    </div>
+  );
+}
+
+function AlertCard({ severity, title, detail, metric }: { severity: "critical" | "warning" | "info" | "ok"; title: string; detail: string; metric: string }) {
+  const styles = {
+    critical: { bg: "#fef2f2", border: "#fecaca", iconColor: "#dc2626", metricColor: "#dc2626" },
+    warning: { bg: "#fffbeb", border: "#fde68a", iconColor: "#d97706", metricColor: "#d97706" },
+    info: { bg: "#eff6ff", border: "#bfdbfe", iconColor: "#2563eb", metricColor: "#2563eb" },
+    ok: { bg: "#ecfdf5", border: "#a7f3d0", iconColor: "#059669", metricColor: "#059669" },
+  }[severity];
+  const icons = {
+    critical: "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+    warning: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+    info: "M22 12h-4M6 12H2M12 6V2M12 22v-4",
+    ok: "M20 6L9 17l-5-5",
+  }[severity];
+
+  return (
+    <div className="rounded-xl p-4 transition-shadow hover:shadow-md" style={{ background: styles.bg, border: `1px solid ${styles.border}` }}>
+      <div className="flex items-start gap-2.5 mb-2">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={styles.iconColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5"><path d={icons} /></svg>
+        <p className="text-[13px] font-bold text-gray-900">{title}</p>
+      </div>
+      <p className="text-[11.5px] text-gray-600 leading-relaxed mb-2">{detail}</p>
+      <p className="text-lg font-bold tabular-nums" style={{ color: styles.metricColor }}>{metric}</p>
+    </div>
+  );
+}
+
+function WaterfallBar({ label, sub, amount, total, type }: { label: string; sub: string; amount: number; total: number; type: "positive" | "deduction" | "cost" | "final" }) {
+  const pct = total > 0 ? (amount / total) * 100 : 0;
+  const bgColor = { positive: "#4338ca", deduction: "#f59e0b", cost: "#ef4444", final: "#059669" }[type];
+  const isNeg = type === "deduction" || type === "cost";
+  return (
+    <div className="grid items-center gap-3" style={{ gridTemplateColumns: "160px 1fr 120px" }}>
+      <div>
+        <p className={`text-xs font-semibold ${type === "final" ? "text-gray-900" : "text-gray-700"}`}>{label}</p>
+        <p className="text-[10px] text-gray-400">{sub}</p>
+      </div>
+      <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(pct, 1)}%`, background: bgColor }} />
+      </div>
+      <div className="text-right">
+        <span className={`text-xs font-bold font-mono tabular-nums ${type === "final" ? "text-emerald-600" : isNeg ? "text-gray-700" : ""}`} style={type === "positive" ? { color: "#1e1b8a" } : undefined}>
+          {isNeg ? "−" : ""}${fmt(amount)}
+        </span>
+        <span className="text-[10px] text-gray-400 ml-1">{pct.toFixed(1)}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Negocio Tab ───────────────────────────────────────────────────────────
+
+function NegocioTab({ kpis, anio, comparativo, rentabilidad, resumenReceptores, receptoresTotal, transacciones }: {
+  kpis: KPIs;
+  anio: number;
+  comparativo: ComparativoNegocio[] | null;
+  rentabilidad: RentabilidadPlataforma[] | null;
+  resumenReceptores: { rut: string; nombre: string; pendiente: number; pagado: number; transacciones: number; bruto: number; comisionNeta: number; costoPlat: number; margen: number; ultimaFecha: string | null }[];
+  receptoresTotal: number;
+  transacciones: Transaccion[];
+}) {
+  const sus = comparativo?.find((c) => c.linea === "Suscripciones");
+  const mkt = comparativo?.find((c) => c.linea === "Marketplace");
+  const totalIngreso = (sus?.ingresos || 0) + (mkt?.ingresos || 0);
+  const susPct = totalIngreso > 0 ? ((sus?.ingresos || 0) / totalIngreso) * 100 : 0;
+  const mktPct = totalIngreso > 0 ? ((mkt?.ingresos || 0) / totalIngreso) * 100 : 0;
+
+  const mesesConData = kpis.porMes.filter((m) => m.tx > 0).length || 1;
+  const mktMensual = mkt ? mkt.ingresos / mesesConData : 0;
+  const susMensual = sus ? sus.ingresos / mesesConData : 0;
+  const arrRunRate = (susMensual + mktMensual) * 12;
+
+  const mktActivos = resumenReceptores.length;
+  const powerUsers = mktActivos;
+  const dormidos = receptoresTotal - mktActivos;
+  const inactivos = Math.max(0, receptoresTotal - 28);
+  const subscriptionOnly = Math.max(0, 28 - powerUsers);
+
+  const estudiosMap = new Map<string, { rut: string; nombre: string; tx: number; gmv: number; comision: number; ultima: string }>();
+  for (const t of transacciones) {
+    if (t.estado === "ANULADO") continue;
+    const key = t.estudio_rut || t.abogado_rut || "SIN";
+    if (!estudiosMap.has(key)) {
+      estudiosMap.set(key, {
+        rut: t.estudio_rut || t.abogado_rut || "",
+        nombre: t.estudio_nombre || t.abogado_nombre || "Sin estudio/abogado",
+        tx: 0, gmv: 0, comision: 0, ultima: "",
+      });
+    }
+    const e = estudiosMap.get(key)!;
+    e.tx++;
+    e.gmv += Number(t.monto_bruto);
+    e.comision += Number(t.comision_nl_neta);
+    if (t.fecha_transaccion > e.ultima) e.ultima = t.fecha_transaccion;
+  }
+  const estudios = [...estudiosMap.values()].sort((a, b) => b.gmv - a.gmv);
+  const totalEstudios = new Set(transacciones.filter((t) => t.estado !== "ANULADO" && t.estudio_rut).map((t) => t.estudio_rut)).size;
+  const totalAbogados = new Set(transacciones.filter((t) => t.estado !== "ANULADO" && t.abogado_rut).map((t) => t.abogado_rut)).size;
+
+  if (!comparativo) {
+    return (
+      <div className="animate-fadeIn flex items-center justify-center py-20">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm text-gray-500">Cargando datos del negocio...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5 animate-fadeIn">
+      {/* Business Narrative Banner */}
+      <div className="rounded-xl p-5 sm:p-6" style={{ background: "linear-gradient(135deg, #1e1b4b 0%, #312e81 100%)" }}>
+        <p className="text-lg font-bold text-white mb-2">El estado del negocio · YTD {anio}</p>
+        <p className="text-[13px] text-white/80 leading-relaxed">
+          Notifica Legal opera con un <b className="text-white">modelo híbrido</b> de dos motores complementarios:
+          {" "}<span className="text-blue-300 font-semibold">Suscripciones</span> aporta el <b className="text-white">{susPct.toFixed(1)}%</b> de los ingresos
+          (${fmt(sus?.ingresos || 0)} YTD, predecible), mientras
+          {" "}<span className="text-purple-300 font-semibold">Marketplace</span> aporta el <b className="text-white">{mktPct.toFixed(1)}%</b> (${fmt(mkt?.ingresos || 0)} YTD),
+          el motor de expansión.
+        </p>
+        <p className="text-[13px] text-white/70 mt-3">
+          <b className="text-white">Run-rate anualizado: ${fmt(arrRunRate)}</b> · {mktActivos} receptores monetizados vía Marketplace · {totalEstudios} estudios registrados.
+        </p>
+      </div>
+
+      {/* ARR KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <HeroKpi label="ARR (Run-rate)" value={`$${fmt(arrRunRate)}`} sub="Suscripciones + Marketplace anualizado" />
+        <HeroKpi label="MRR Suscripciones" value={`$${fmt(susMensual)}`} sub={`ARPU $${fmt(subscriptionOnly > 0 ? susMensual / subscriptionOnly : susMensual)}`} />
+        <HeroKpi label="Marketplace Run-Rate" value={`$${fmt(mktMensual)}/mes`} sub={`Promedio últimos ${mesesConData} meses`} />
+        <HeroKpi label="Revenue Mix" value={`${Math.round(susPct)} / ${Math.round(mktPct)}`} sub="Predecible vs transaccional" />
+      </div>
+
+      {/* Revenue Mix Bar */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Composición del ingreso</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-bold text-gray-900">Distribución de revenue YTD · ${fmt(totalIngreso)}</p>
+          <span className="text-xs text-gray-500">Neto sin IVA</span>
+        </div>
+        <div className="flex h-8 rounded-lg overflow-hidden mb-3">
+          {susPct > 0 && (
+            <div className="flex items-center justify-center text-[11px] font-bold text-white" style={{ width: `${susPct}%`, background: "#2563eb" }}>
+              {susPct > 15 && `Suscripciones ${susPct.toFixed(1)}%`}
+            </div>
+          )}
+          {mktPct > 0 && (
+            <div className="flex items-center justify-center text-[11px] font-bold text-white" style={{ width: `${Math.max(mktPct, 5)}%`, background: "#9333ea" }}>
+              {mktPct > 8 && `MKT ${mktPct.toFixed(1)}%`}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-5 text-xs">
+          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#2563eb" }} /><span className="text-gray-600">Suscripciones</span> <b>${fmt(sus?.ingresos || 0)}</b></span>
+          <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: "#9333ea" }} /><span className="text-gray-600">Marketplace</span> <b>${fmt(mkt?.ingresos || 0)}</b></span>
+          <span className="ml-auto text-gray-500">Total YTD <b className="text-gray-900">${fmt(totalIngreso)}</b></span>
+        </div>
+      </div>
+
+      {/* Deep Dive Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Suscripciones */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-4" style={{ background: "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)", borderBottom: "1px solid #bfdbfe" }}>
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-500">Suscripciones · Motor base</p>
+                <p className="text-xl font-bold text-gray-900 mt-1">${fmt(sus?.ingresos || 0)} <span className="text-sm font-medium text-gray-500">netos YTD</span></p>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-md font-bold uppercase bg-blue-100 text-blue-700">Predecible</span>
+            </div>
+          </div>
+          <div className="p-5 grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">MRR actual</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">${fmt(susMensual)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Transacciones</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{sus?.transacciones || 0}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Margen</p>
+              <p className="text-base font-bold tabular-nums mt-0.5 text-emerald-600">${fmt(sus?.margen || 0)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Margen %</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{(sus?.margen_pct || 0).toFixed(1)}%</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Costos</p>
+              <p className="text-base font-bold tabular-nums mt-0.5 text-red-600">${fmt(sus?.costos || 0)}</p>
+            </div>
+          </div>
+          {sus?.por_mes && sus.por_mes.length > 0 && (
+            <div className="px-5 pb-4">
+              <p className="text-[10px] uppercase font-semibold text-gray-400 mb-2">MRR evolution</p>
+              <div className="flex items-end gap-1 h-10">
+                {Array.from({ length: 12 }, (_, i) => {
+                  const m = sus.por_mes.find((p) => p.mes === i + 1);
+                  const v = m?.ingresos || 0;
+                  const maxV = Math.max(...sus.por_mes.map((p) => p.ingresos), 1);
+                  return <div key={i} className="flex-1 rounded-t min-h-[2px]" style={{ height: `${Math.max((v / maxV) * 100, v > 0 ? 8 : 2)}%`, background: v > 0 ? "#3b82f6" : "#e5e7eb" }} />;
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Marketplace */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-4" style={{ background: "linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%)", borderBottom: "1px solid #ddd6fe" }}>
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-purple-500">Marketplace · Motor de expansión</p>
+                <p className="text-xl font-bold text-gray-900 mt-1">${fmt(mkt?.ingresos || 0)} <span className="text-sm font-medium text-gray-500">netos YTD</span></p>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-md font-bold uppercase bg-purple-100 text-purple-700">Transaccional</span>
+            </div>
+          </div>
+          <div className="p-5 grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Receptores activos</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{mktActivos} <span className="text-xs text-gray-400 font-medium">/ {receptoresTotal}</span></p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Transacciones</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{kpis.totalTx}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Ticket promedio</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">${fmt(kpis.ticketPromedio)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Take rate</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{kpis.totalVentas > 0 ? ((kpis.totalMargen / kpis.totalVentas) * 100).toFixed(2) : "0"}%</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Repeat rate</p>
+              <p className="text-base font-bold tabular-nums mt-0.5">{mktActivos > 0 ? (kpis.totalTx / mktActivos).toFixed(1) : "0"}x <span className="text-[10px] text-gray-400">tx/recep.</span></p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-gray-500">Activación rate</p>
+              <p className={`text-base font-bold tabular-nums mt-0.5 ${(mktActivos / Math.max(receptoresTotal, 1)) * 100 < 40 ? "text-amber-600" : "text-emerald-600"}`}>
+                {receptoresTotal > 0 ? ((mktActivos / receptoresTotal) * 100).toFixed(1) : "0"}%
+              </p>
+            </div>
+          </div>
+          {mkt?.por_mes && mkt.por_mes.length > 0 && (
+            <div className="px-5 pb-4">
+              <p className="text-[10px] uppercase font-semibold text-gray-400 mb-2">GMV evolution</p>
+              <div className="flex items-end gap-1 h-10">
+                {Array.from({ length: 12 }, (_, i) => {
+                  const m = mkt.por_mes.find((p) => p.mes === i + 1);
+                  const v = m?.ingresos || 0;
+                  const maxV = Math.max(...mkt.por_mes.map((p) => p.ingresos), 1);
+                  return <div key={i} className="flex-1 rounded-t min-h-[2px]" style={{ height: `${Math.max((v / maxV) * 100, v > 0 ? 8 : 2)}%`, background: v > 0 ? "#9333ea" : "#e5e7eb" }} />;
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Cross-pollination */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Análisis de activación</p>
+        <p className="text-sm font-bold text-gray-900 mb-1">Cross-pollination receptores: ¿quién genera valor compuesto?</p>
+        <p className="text-xs text-gray-500 mb-4">Base: {receptoresTotal} receptores registrados</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="rounded-xl p-4 border" style={{ background: "#ecfdf5", borderColor: "#a7f3d0" }}>
+            <p className="text-2xl font-bold text-emerald-700">{powerUsers}</p>
+            <p className="text-sm font-bold text-gray-900 mt-1">Power users</p>
+            <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">Usan marketplace activamente. Generan revenue compuesto.</p>
+            {powerUsers > 0 && (
+              <p className="text-[11px] text-gray-500 mt-2">ARPU: <b className="text-gray-900">${fmt(kpis.totalVentas / powerUsers)}/mes</b></p>
+            )}
+          </div>
+          <div className="rounded-xl p-4 border" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <p className="text-2xl font-bold text-blue-700">{subscriptionOnly}</p>
+            <p className="text-sm font-bold text-gray-900 mt-1">Subscription-only</p>
+            <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">Pagan suscripción pero NO han usado marketplace. <b className="text-blue-600">Oportunidad de upsell</b>.</p>
+          </div>
+          <div className="rounded-xl p-4 border" style={{ background: "#f9fafb", borderColor: "#e5e7eb" }}>
+            <p className="text-2xl font-bold text-gray-500">{inactivos}</p>
+            <p className="text-sm font-bold text-gray-900 mt-1">Inactivos</p>
+            <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">Registrados sin actividad. Candidatos a reactivación o limpieza.</p>
+          </div>
+        </div>
+        {subscriptionOnly > 0 && powerUsers > 0 && (
+          <div className="mt-4 p-3.5 rounded-lg text-[12.5px] text-gray-700 leading-relaxed" style={{ background: "#f5f3ff", borderLeft: "3px solid #4338ca" }}>
+            <b className="text-gray-900">Insight estratégico:</b> Si activáramos solo <b>5 de los {subscriptionOnly} subscription-only</b> al nivel promedio de los power users, sumaríamos
+            <b style={{ color: "#4338ca" }}> ~${fmt((kpis.totalVentas / powerUsers) * 5 * 12)} adicionales anuales</b> sin costo de adquisición.
+          </div>
+        )}
+      </div>
+
+      {/* Estudios Table */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-0.5">Lado de demanda</p>
+            <p className="text-sm font-bold text-gray-900">Estudios y abogados · Quién genera la demanda</p>
+          </div>
+          <span className="text-xs text-gray-500">{totalEstudios} estudios · {totalAbogados} abogados</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px]">
+            <thead>
+              <tr className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold border-b bg-gray-50/50">
+                <th className="px-3 py-2.5 text-left">Estudio / Abogado</th>
+                <th className="px-3 py-2.5 text-right">Tx</th>
+                <th className="px-3 py-2.5 text-right">GMV</th>
+                <th className="px-3 py-2.5 text-right">Comisión NL</th>
+                <th className="px-3 py-2.5 text-right hidden sm:table-cell">Frecuencia</th>
+                <th className="px-3 py-2.5 text-right hidden sm:table-cell">Última tx</th>
+              </tr>
+            </thead>
+            <tbody>
+              {estudios.slice(0, 12).map((e) => (
+                <tr key={e.rut || e.nombre} className="border-b border-gray-100 hover:bg-gray-50/50">
+                  <td className="px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-900">{e.nombre}</span>
+                    {e.rut && <span className="font-mono text-[10px] text-gray-400 ml-1.5">{formatRut(e.rut)}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">{e.tx}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums font-semibold">${fmt(e.gmv)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs tabular-nums" style={{ color: "#1e1b8a" }}>${fmt(e.comision)}</td>
+                  <td className="px-3 py-2 text-right text-xs text-gray-500 hidden sm:table-cell">{(e.tx / mesesConData).toFixed(1)} tx/mes</td>
+                  <td className="px-3 py-2 text-right text-xs text-gray-500 hidden sm:table-cell">{e.ultima ? new Date(e.ultima + "T12:00:00").toLocaleDateString("es-CL") : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {estudios.length === 0 && <p className="text-sm text-gray-400 text-center py-6">Sin datos de estudios</p>}
+      </div>
+
+      {/* Forecast Card */}
+      <div className="rounded-xl overflow-hidden" style={{ background: "linear-gradient(135deg, #1e1b4b 0%, #4338ca 100%)" }}>
+        <div className="px-5 sm:px-6 py-5 sm:py-6">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-white/50 mb-1">Proyección · Cierre {anio}</p>
+          <p className="text-lg font-bold text-white mb-4">Si mantenemos pace actual, así cerramos el año</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-white/50">Revenue Total {anio}E</p>
+              <p className="text-xl font-bold text-white tabular-nums mt-1">${fmt(arrRunRate)}</p>
+              <p className="text-[11px] text-white/60 mt-1">
+                Suscripciones <b className="text-white/90">${fmt(susMensual * 12)}</b> + MKT <b className="text-white/90">${fmt(mktMensual * 12)}</b>
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-white/50">GMV Marketplace {anio}E</p>
+              <p className="text-xl font-bold text-white tabular-nums mt-1">${fmt((kpis.totalVentas / mesesConData) * 12)}</p>
+              <p className="text-[11px] text-white/60 mt-1">Run-rate · {Math.round((kpis.totalTx / mesesConData) * 12)} tx proyectadas</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-white/50">Margen Neto MKT</p>
+              <p className="text-xl font-bold text-emerald-400 tabular-nums mt-1">${fmt((kpis.totalMargen / mesesConData) * 12)}</p>
+              <p className="text-[11px] text-white/60 mt-1">Take rate efectivo <b className="text-white/90">{kpis.totalVentas > 0 ? ((kpis.totalMargen / kpis.totalVentas) * 100).toFixed(2) : "0"}%</b></p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase font-semibold text-white/50">Receptores activos · cierre</p>
+              <p className="text-xl font-bold text-white tabular-nums mt-1">{mktActivos + Math.round(mktActivos * 0.3)}</p>
+              <p className="text-[11px] text-white/60 mt-1">+{Math.round(mktActivos * 0.3)} activaciones proyectadas</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
