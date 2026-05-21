@@ -361,6 +361,8 @@ export type LineaPreview = {
   auxiliar_rut: string;
   tipo_doc: string;
   num_doc: string;
+  tipo_doc_ref: string;
+  num_doc_ref: string;
 };
 
 export async function previsualizarCentralizacion(
@@ -369,7 +371,8 @@ export async function previsualizarCentralizacion(
   mes: number,
   cuentaContrapartida: string,
   docIds: number[],
-  cuentasPorDoc?: Record<number, string>
+  cuentasPorDoc?: Record<number, string>,
+  sinRefIds?: number[]
 ): Promise<{ lineas: LineaPreview[]; totalDebe: number; totalHaber: number; error: string | null }> {
   const config = await getConfig();
 
@@ -403,8 +406,9 @@ export async function previsualizarCentralizacion(
     if (docsErr) return { lineas: [], totalDebe: 0, totalHaber: 0, error: docsErr };
     const selectedDocs = docs.filter((d) => docIds.includes(d.id));
     if (selectedDocs.length === 0) return { lineas: [], totalDebe: 0, totalHaber: 0, error: "Sin documentos" };
-    if (tipo === "ventas") lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap);
-    else lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc);
+    const sinRefSet = new Set(sinRefIds || []);
+    if (tipo === "ventas") lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap, sinRefSet);
+    else lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc, sinRefSet);
   }
 
   let totalDebe = 0, totalHaber = 0;
@@ -424,6 +428,8 @@ export async function previsualizarCentralizacion(
     auxiliar_rut: l.auxiliar_rut,
     tipo_doc: l.tipo_doc,
     num_doc: l.num_doc,
+    tipo_doc_ref: l.tipo_doc_ref,
+    num_doc_ref: l.num_doc_ref,
   }));
 
   return { lineas: preview, totalDebe: Math.round(totalDebe), totalHaber: Math.round(totalHaber), error: null };
@@ -437,7 +443,8 @@ export async function centralizarDocumentos(
   mes: number,
   cuentaContrapartida: string,
   docIds: number[],
-  cuentasPorDoc?: Record<number, string>
+  cuentasPorDoc?: Record<number, string>,
+  sinRefIds?: number[]
 ) {
   await requireRol("contador");
   const supabase = await createClient();
@@ -488,10 +495,11 @@ export async function centralizarDocumentos(
     const tipoAux = tipo === "ventas" ? "CLIENTE" : "PROVEEDOR";
     await ensureAuxiliares(supabase, selectedDocs.map((d) => ({ rut: d.rut, razon_social: d.razon_social })), tipoAux);
 
+    const sinRefSet = new Set(sinRefIds || []);
     if (tipo === "ventas") {
-      lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap);
+      lineas = buildLineasVentas(selectedDocs, cuentaContrapartida, config, reglasMap, sinRefSet);
     } else {
-      lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc);
+      lineas = buildLineasCompras(selectedDocs, cuentaContrapartida, config, reglasMap, cuentasPorDoc, sinRefSet);
     }
   }
 
@@ -908,7 +916,7 @@ async function ensureAuxiliares(supabase: any, items: { rut: string; razon_socia
 
 // ─── Builders de líneas contables ───────────────────────────────────────
 
-function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: Record<string, string>, reglasMap: Map<string, string>) {
+function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: Record<string, string>, reglasMap: Map<string, string>, sinRefSet?: Set<number>) {
   const ctaClientes = config.CENT_CTA_CLIENTES || "1-1-03-001";
   const ctaIVADebito = config.CENT_CTA_IVA_DEBITO || "2-1-06-001";
   const ctaVentasDefault = cuentaVentas || config.CENT_CTA_VENTAS || "4-1-01-001";
@@ -925,7 +933,7 @@ function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: R
 
     let tipo_doc_ref = "";
     let num_doc_ref = "";
-    if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio) {
+    if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio && !sinRefSet?.has(doc.id)) {
       tipo_doc_ref = doc.ref_tipo;
       num_doc_ref = doc.ref_folio;
     }
@@ -967,7 +975,7 @@ function buildLineasVentas(docs: DocPendiente[], cuentaVentas: string, config: R
   return lineas;
 }
 
-function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: Record<string, string>, reglasMap: Map<string, string>, cuentasPorDoc?: Record<number, string>) {
+function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: Record<string, string>, reglasMap: Map<string, string>, cuentasPorDoc?: Record<number, string>, sinRefSet?: Set<number>) {
   const ctaProveedores = config.CENT_CTA_PROVEEDORES || "2-1-02-001";
   const ctaIVACredito = config.CENT_CTA_IVA_CREDITO || "1-1-07-002";
   const ctaGastoDefault = cuentaGasto || config.CENT_CTA_GASTOS || "5-1-01-001";
@@ -985,7 +993,7 @@ function buildLineasCompras(docs: DocPendiente[], cuentaGasto: string, config: R
 
     let tipo_doc_ref = "";
     let num_doc_ref = "";
-    if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio) {
+    if ((isNC || doc.esND) && doc.ref_tipo && doc.ref_folio && !sinRefSet?.has(doc.id)) {
       tipo_doc_ref = doc.ref_tipo;
       num_doc_ref = doc.ref_folio;
     }

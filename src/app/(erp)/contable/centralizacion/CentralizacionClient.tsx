@@ -63,6 +63,7 @@ export default function CentralizacionClient({
 
   // Preview
   const [preview, setPreview] = useState<{ lineas: LineaPreview[]; totalDebe: number; totalHaber: number } | null>(null);
+  const [sinRef, setSinRef] = useState<Set<number>>(new Set());
 
   // Reglas
   const [reglas, setReglas] = useState<ReglaCentralizacion[]>(reglasInit);
@@ -104,6 +105,7 @@ export default function CentralizacionClient({
     setDocsTransbank([]);
     setVistaReglas(false);
     setCuentaContra(cuentaDefaultPorLibro(tipo));
+    setSinRef(new Set());
   };
 
   const buildCuentasIniciales = (tipo: TipoLibro, documentos: DocPendiente[]) => {
@@ -162,7 +164,8 @@ export default function CentralizacionClient({
 
     startTransition(async () => {
       const ctasDoc = libroActivo === "compras" ? cuentasPorDoc : undefined;
-      const result = await previsualizarCentralizacion(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc);
+      const sinRefArr = sinRef.size > 0 ? [...sinRef] : undefined;
+      const result = await previsualizarCentralizacion(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc, sinRefArr);
       if (result.error) { setMensaje({ tipo: "error", texto: result.error }); return; }
       setPreview({ lineas: result.lineas, totalDebe: result.totalDebe, totalHaber: result.totalHaber });
     });
@@ -178,7 +181,8 @@ export default function CentralizacionClient({
 
     startTransition(async () => {
       const ctasDoc = libroActivo === "compras" ? cuentasPorDoc : undefined;
-      const result = await centralizarDocumentos(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc);
+      const sinRefArr = sinRef.size > 0 ? [...sinRef] : undefined;
+      const result = await centralizarDocumentos(libroActivo, anio, mesActivo, cuenta, [...selectedIds], ctasDoc, sinRefArr);
       if (result.error) {
         setMensaje({ tipo: "error", texto: result.error });
       } else {
@@ -877,7 +881,18 @@ export default function CentralizacionClient({
                               <span className="px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-mono text-xs">{regla.cuenta_codigo}</span>
                             ) : null}
                           </td>
-                          <td className="py-1.5 text-xs text-gray-500">{d.ref_tipo && d.ref_folio ? `${d.ref_tipo} ${d.ref_folio}` : ""}</td>
+                          <td className="py-1.5 text-xs">
+                            {d.ref_tipo && d.ref_folio ? (
+                              <button
+                                type="button"
+                                onClick={() => setSinRef((prev) => { const next = new Set(prev); if (next.has(d.id)) next.delete(d.id); else next.add(d.id); return next; })}
+                                className={`px-1.5 py-0.5 rounded font-mono transition ${sinRef.has(d.id) ? "bg-gray-100 text-gray-400 line-through" : "bg-indigo-50 text-indigo-700"}`}
+                                title={sinRef.has(d.id) ? "Sin referencia — click para reactivar" : "Referencia activa — click para quitar"}
+                              >
+                                {d.ref_tipo} {d.ref_folio}
+                              </button>
+                            ) : null}
+                          </td>
                         </tr></>
                       );
                     })}
@@ -915,8 +930,11 @@ export default function CentralizacionClient({
                       <thead>
                         <tr className="text-left text-gray-500 border-b">
                           <th className="pb-2 font-medium">Cuenta</th>
-                          <th className="pb-2 font-medium">Glosa</th>
                           <th className="pb-2 font-medium">Auxiliar</th>
+                          <th className="pb-2 font-medium">T.Doc</th>
+                          <th className="pb-2 font-medium">N.Doc</th>
+                          <th className="pb-2 font-medium">T.Ref</th>
+                          <th className="pb-2 font-medium">N.Ref</th>
                           <th className="pb-2 font-medium text-right">Debe</th>
                           <th className="pb-2 font-medium text-right">Haber</th>
                         </tr>
@@ -925,8 +943,11 @@ export default function CentralizacionClient({
                         {preview.lineas.map((l, i) => (
                           <tr key={i} className="border-b last:border-0 hover:bg-white/60">
                             <td className="py-1.5 text-xs font-medium"><span className="font-mono">{l.cuenta_codigo}</span>{l.cuenta_nombre && <span className="text-gray-500 ml-1">— {l.cuenta_nombre}</span>}</td>
-                            <td className="py-1.5 text-xs truncate max-w-[220px]">{l.glosa}</td>
-                            <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut || ""}</td>
+                            <td className="py-1.5 text-xs font-mono text-gray-500">{l.auxiliar_rut ? formatRut(l.auxiliar_rut) : ""}</td>
+                            <td className="py-1.5 text-xs font-mono text-indigo-600">{l.tipo_doc}</td>
+                            <td className="py-1.5 text-xs font-mono text-gray-500">{l.num_doc}</td>
+                            <td className="py-1.5 text-xs font-mono text-gray-400">{l.tipo_doc_ref}</td>
+                            <td className="py-1.5 text-xs font-mono text-gray-400">{l.num_doc_ref}</td>
                             <td className="py-1.5 text-right font-mono">{l.debe > 0 ? formatMonto(l.debe) : ""}</td>
                             <td className="py-1.5 text-right font-mono">{l.haber > 0 ? formatMonto(l.haber) : ""}</td>
                           </tr>
@@ -934,7 +955,7 @@ export default function CentralizacionClient({
                       </tbody>
                       <tfoot>
                         <tr className="border-t-2 font-bold">
-                          <td colSpan={3} className="py-2 text-right">TOTALES</td>
+                          <td colSpan={6} className="py-2 text-right">TOTALES</td>
                           <td className="py-2 text-right font-mono">{formatMonto(preview.totalDebe)}</td>
                           <td className="py-2 text-right font-mono">{formatMonto(preview.totalHaber)}</td>
                         </tr>
