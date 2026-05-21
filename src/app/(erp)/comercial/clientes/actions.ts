@@ -57,9 +57,23 @@ export async function guardarFicha(data: FichaUpdate) {
 
   if (error) return { error: error.message };
 
-  await supabase
+  const { data: existingAux } = await supabase
     .from("auxiliares")
-    .upsert({
+    .select("rut")
+    .eq("rut", rut)
+    .maybeSingle();
+
+  if (existingAux) {
+    await supabase.from("auxiliares").update({
+      razon_social: data.razon_social,
+      giro: data.giro || "",
+      direccion: data.direccion || "",
+      comuna: data.comuna || "",
+      telefono: data.telefono || "",
+      email: data.email || "",
+    }).eq("rut", rut);
+  } else {
+    await supabase.from("auxiliares").insert({
       rut,
       razon_social: data.razon_social,
       giro: data.giro || "",
@@ -69,7 +83,8 @@ export async function guardarFicha(data: FichaUpdate) {
       email: data.email || "",
       tipo: "CLIENTE",
       estado: "S",
-    }, { onConflict: "rut" });
+    });
+  }
 
   revalidatePath("/comercial/clientes");
   return { error: null };
